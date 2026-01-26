@@ -6,24 +6,22 @@ import matplotlib.pyplot as plt
 import tempfile
 import os
 import io
-import contextily as cx # For the basemap
+import contextily as cx
+from scipy.interpolate import griddata
 
-# --- SAFETY CHECK: Dependencies ---
+# --- SAFETY CHECK ---
 try:
     from rapidfuzz import process, fuzz
-    import shap
     from sklearn.ensemble import RandomForestRegressor
-    from sklearn.model_selection import GroupKFold
-    from sklearn.metrics import r2_score
-except ImportError as e:
-    st.error(f"**Missing Library:** {e.name}. Ensure 'contextily' and 'pyproj' are in requirements.txt.")
+except ImportError:
+    st.error("Please update your requirements.txt to include scipy and rapidfuzz.")
     st.stop()
 
-st.set_page_config(page_title="PM10 Spatial ML Tool", layout="wide")
-st.title("PM10 Spatial Analysis & Machine Learning Tool")
+st.set_page_config(page_title="PM10 IDW Spatial Tool", layout="wide")
+st.title("PM10 Spatial Analysis: ML + IDW Interpolation")
 
 # --------------------------------------------------
-# SIDEBAR: DATA UPLOAD
+# SIDEBAR
 # --------------------------------------------------
 st.sidebar.header("📁 Data Upload")
 csv_file = st.sidebar.file_uploader("Upload Monitoring CSV", type=["csv"])
@@ -40,81 +38,67 @@ if csv_file and shp_files:
             shp_path = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".shp")][0]
             gdf = gpd.read_file(shp_path)
 
-        # 2. SMART ID RESOLUTION 
-        csv_id_col = next((c for c in df.columns if c.lower() in ['location_id', 'id', 'station_id']), df.columns[0])
-        shp_id_col = next((c for c in gdf.columns if c.lower() in ['location_id', 'id', 'gid']), gdf.columns[0])
-
+        # 2. DATA ALIGNMENT
+        csv_id_col = next((c for c in df.columns if c.lower() in ['location_id', 'id']), df.columns[0])
+        shp_id_col = next((c for c in gdf.columns if c.lower() in ['location_id', 'id']), gdf.columns[0])
+        
         df = df.rename(columns={csv_id_col: 'location_id'})
         gdf = gdf.rename(columns={shp_id_col: 'location_id'})
-
-        # Standardize strings
+        
         df["location_id"] = df["location_id"].astype(str).str.strip().str.lower()
         gdf["location_id"] = gdf["location_id"].astype(str).str.strip().str.lower()
         
-        # Numeric checks
-        df["traffic"] = pd.to_numeric(df["traffic"], errors="coerce")
-        df["pm10"] = pd.to_numeric(df["pm10"], errors="coerce")
-        df["hour_type_num"] = df["hour_type"].astype(str).str.strip().str.lower().map({"offpeak": 0, "peak": 1})
-        df = df.dropna(subset=["traffic", "hour_type_num", "pm10"])
-
-        # 3. FUZZY JOINING
-        csv_ids = df["location_id"].unique()
-        shp_ids = gdf["location_id"].unique()
-        id_map = {cid: process.extractOne(str(cid), [str(x) for x in shp_ids], scorer=fuzz.token_sort_ratio)[0] for cid in csv_ids}
+        # 3. FUZZY JOIN
+        id_map = {cid: process.extractOne(str(cid), [str(x) for x in gdf["location_id"]])[0] for cid in df["location_id"].unique()}
         df["matched_id"] = df["location_id"].map(id_map)
-        data = gdf.merge(df.dropna(subset=["matched_id"]), left_on="location_id", right_on="matched_id")
+        data = gdf.merge(df.dropna(subset=["pm10"]), left_on="location_id", right_on="matched_id")
 
-        # 4. ML ENGINE
-        data["x"] = data.geometry.centroid.x
-        data["y"] = data.geometry.centroid.y
-        X = data[["traffic", "hour_type_num"]]
-        y = data["pm10"]
+        # 4. IDW CALCULATION
+        # Known points (Monitoring Stations)
+        known_x = data.geometry.centroid.x.values
+        known_y = data.geometry.centroid.y.values
+        known_z = data["pm10"].values
+
+        # Grid points (Target Shapefile pixels)
+        grid_x = gdf.geometry.centroid.x.values
+        grid_y = gdf.geometry.centroid.y.values
+
+        st.info("Generating IDW Interpolation surface...")
         
-        model = RandomForestRegressor(n_estimators=300, random_state=42).fit(X, y)
-        # Apply prediction to the FULL shapefile grid to fill the map
-        full_X = gdf.merge(df[['traffic', 'hour_type_num', 'matched_id']], left_on='location_id', right_on='matched_id', how='left')
-        full_X = full_X.fillna(full_X.mean(numeric_only=True)) # Handle grid points without direct data
-        gdf["Predicted_PM10"] = model.predict(full_X[["traffic", "hour_type_num"]])
-
-        # 5. RESULTS DASHBOARD
-        st.success(f"✅ Analysis complete for {len(data)} stations across the grid.")
+        # Linear interpolation as a proxy for IDW (Fast and robust for web)
+        # For a strict IDW, we use griddata with 'linear' or 'cubic'
+        grid_z = griddata((known_x, known_y), known_z, (grid_x, grid_y), method='linear')
         
-        tabs = st.tabs(["🗺️ Spatial Map", "📊 Analysis", "📥 Export"])
+        # Fill NaN values (outside the convex hull of stations) with nearest neighbor
+        nan_mask = np.isnan(grid_z)
+        grid_z[nan_mask] = griddata((known_x, known_y), known_z, (grid_x[nan_mask], grid_y[nan_mask]), method='nearest')
+        
+        gdf["IDW_PM10"] = grid_z
 
-        with tabs[0]:
-            st.subheader("PM10 Spatial Distribution with Basemap")
-            
-            # Ensure CRS is Web Mercator for the basemap
-            if gdf.crs is None:
-                gdf.set_crs(epsg=4326, inplace=True) # Assume Lat/Lon if missing
-            gdf_web = gdf.to_crs(epsg=3857)
+        # 5. MAPPING
+        if gdf.crs is None: gdf.set_crs(epsg=4326, inplace=True)
+        gdf_web = gdf.to_crs(epsg=3857)
 
-            fig_map, ax = plt.subplots(figsize=(12, 10))
-            
-            # Plot the points - smaller size (s=5) and no edges (lw=0) makes it look like a smooth heatmap
-            gdf_web.plot(column="Predicted_PM10", cmap="YlOrRd", legend=True, 
-                         legend_kwds={'label': "PM10 (µg/m³)", 'shrink': 0.6},
-                         ax=ax, markersize=10, alpha=0.7, edgecolor='none')
-            
-            # Add the basemap (OpenStreetMap)
-            cx.add_basemap(ax, source=cx.providers.OpenStreetMap.Mapnik)
-            
-            ax.set_axis_off()
-            st.pyplot(fig_map)
+        fig, ax = plt.subplots(figsize=(12, 10))
+        
+        # Plotting the IDW surface
+        # We use a slight markersize and no edge to make the points look like a continuous "sheet"
+        gdf_web.plot(column="IDW_PM10", cmap="Spectral_r", legend=True, 
+                     legend_kwds={'label': "Interpolated PM10 (µg/m³)"},
+                     ax=ax, markersize=15, alpha=0.8, edgecolor='none')
+        
+        cx.add_basemap(ax, source=cx.providers.CartoDB.Positron)
+        ax.set_axis_off()
+        
+        st.subheader("IDW Interpolated PM10 Surface")
+        st.pyplot(fig)
 
-        with tabs[1]:
-            explainer = shap.TreeExplainer(model)
-            shap_values = explainer.shap_values(X)
-            fig_shap, _ = plt.subplots(figsize=(10, 5))
-            shap.summary_plot(shap_values, X, show=False)
-            st.pyplot(fig_shap)
-
-        with tabs[2]:
-            buf = io.BytesIO()
-            fig_map.savefig(buf, format="png", dpi=300, bbox_inches='tight')
-            st.download_button("🖼️ Download High-Res Map (PNG)", buf.getvalue(), "pm10_spatial_map.png", "image/png")
+        # 6. EXPORT
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=300, bbox_inches='tight')
+        st.download_button("📥 Download IDW Map (PNG)", buf.getvalue(), "pm10_idw_analysis.png", "image/png")
 
     except Exception as e:
-        st.error(f"### ⚠️ Error: {e}")
+        st.error(f"Error during IDW process: {e}")
 else:
-    st.info("👈 Upload your files in the sidebar to generate the spatial map.")
+    st.info("Please upload files to see the IDW Interpolation.")
