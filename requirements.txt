@@ -1,6 +1,9 @@
+streamlit
 pandas
 geopandas
+numpy
 matplotlib
 scikit-learn
-mapclassify
 rapidfuzz
+shap
+pyproj
