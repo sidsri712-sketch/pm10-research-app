@@ -135,3 +135,9 @@ else:
     # Show an example of what the data should look like
     st.subheader("Example CSV Format")
     example_df = pd.DataFrame({
+        "location_id": [101, 102, 103],
+        "traffic": [450, 200, 600],
+        "hour_type": ["peak", "offpeak", "peak"],
+        "pm10": [75.2, 34.1, 89.5]
+    })
+    st.table(example_df)
