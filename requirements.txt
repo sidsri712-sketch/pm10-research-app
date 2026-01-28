@@ -13,3 +13,4 @@ requests
 plotly
 scikit-learn
 scipy
+pyproj
