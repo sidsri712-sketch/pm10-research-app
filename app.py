@@ -94,7 +94,6 @@ if "df" in st.session_state:
         pm = model.predict(np.c_[lat_grid.ravel(), lon_grid.ravel()]).reshape(res, res)
         pm = gaussian_filter(pm, sigma=5)
 
-        # ---- CRS TRANSFORMATION (FIX) ----
         transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
         xmin, ymin = transformer.transform(lon.min(), lat.min())
         xmax, ymax = transformer.transform(lon.max(), lat.max())
@@ -112,13 +111,13 @@ if "df" in st.session_state:
             zorder=2
         )
 
-        # Stations (reprojected)
         xs, ys = transformer.transform(df.lon.values, df.lat.values)
         ax.scatter(xs, ys, c="black", s=60, edgecolors="white", zorder=3)
 
+        # NEW BASEMAP: CARTODB POSITRON (labels + clean look)
         cx.add_basemap(
             ax,
-            source=cx.providers.Esri.WorldImagery,
+            source=cx.providers.CartoDB.Positron,
             zoom=12
         )
 
@@ -134,6 +133,6 @@ if "df" in st.session_state:
         st.download_button(
             "💾 Download PNG",
             buf,
-            "lucknow_pm10_esri.png",
+            "lucknow_pm10_cartodb.png",
             "image/png"
         )
