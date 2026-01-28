@@ -4,6 +4,4 @@ geopandas
 numpy
 matplotlib
 contextily
-scipy
-rasterio
-affine
+shapely
