@@ -14,7 +14,7 @@ LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
 
 st.set_page_config(page_title="Lucknow PM10 Analysis", layout="wide")
 
-@st.cache_data(ttl=900)  # cache 15 min
+@st.cache_data(ttl=900)
 def get_live_pm10_data():
     url = f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={TOKEN}"
     try:
@@ -43,7 +43,7 @@ def get_live_pm10_data():
                 pass
 
             progress.progress((i + 1) / len(stations))
-            time.sleep(0.7)  # polite rate limiting (important)
+            time.sleep(0.7)
 
         df = pd.DataFrame(data)
         return df.dropna(subset=["pm10"]), None
@@ -71,8 +71,20 @@ if "df" in st.session_state:
     st.subheader("Customize Heatmap")
     opacity = st.slider("Heatmap Opacity", 0.1, 1.0, 0.75, 0.05)
     transparency = st.slider("Station Transparency (Alpha)", 0.1, 1.0, 1.0, 0.05)
-    cmap_options = ["OrRd", "YlOrRd", "hot", "viridis", "plasma", "inferno", "magma"]
+
+    # Multi-colour heatmap palettes
+    cmap_options = [
+        "turbo",
+        "jet",
+        "viridis",
+        "plasma",
+        "inferno",
+        "magma",
+        "Spectral",
+        "coolwarm"
+    ]
     selected_cmap = st.selectbox("Heatmap Color Scheme", cmap_options, index=0)
+
     show_labels = st.checkbox("Show PM10 Values on Stations", value=True)
 
     if st.button("Generate Customized Heatmap"):
@@ -101,14 +113,15 @@ if "df" in st.session_state:
             fig, ax = plt.subplots(figsize=(14, 12))
             extent = [lon_idx.min(), lon_idx.max(), lat_idx.min(), lat_idx.max()]
 
+            # ESRI basemap
             try:
                 cx.add_basemap(
                     ax,
-                    source=cx.providers.OpenStreetMap.Mapnik,
+                    source=cx.providers.Esri.WorldImagery,
                     crs="EPSG:4326",
                     reset_extent=False
                 )
-                st.caption("Basemap: © OpenStreetMap contributors")
+                st.caption("Basemap: © ESRI World Imagery")
             except Exception as e:
                 st.warning(f"Could not load basemap: {e}. Continuing without it.")
 
@@ -131,7 +144,6 @@ if "df" in st.session_state:
                 edgecolors="white",
                 linewidth=1.5,
                 alpha=transparency,
-                label="Monitoring Stations",
                 zorder=3
             )
 
@@ -144,7 +156,7 @@ if "df" in st.session_state:
                         fontsize=8,
                         ha="center",
                         va="bottom",
-                        color="blue",
+                        color="cyan",
                         zorder=4
                     )
 
@@ -155,7 +167,6 @@ if "df" in st.session_state:
                 shrink=0.6,
                 pad=0.04
             )
-            cbar.ax.tick_params(labelsize=10)
 
             ax.set_title(
                 f"Interpolated PM10 Heatmap – Lucknow\n"
