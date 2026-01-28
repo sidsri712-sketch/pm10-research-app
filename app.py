@@ -17,14 +17,22 @@ st.title("🌍 Smart PM10 Mapping Tool (ML Powered)")
 
 with st.expander("📖 Instructions & Formatting"):
     st.markdown("""
-    - **CSV:** Must have `location_id` and `pm10`.
-    - **Shapefile:** Must have an `id` column (case-insensitive).
-    - **Empty Cells:** AI will automatically fill any empty `pm10` rows in your CSV.
+    - **CSV:** Should contain `location_id` and `pm10`.
+    - **Shapefile:** Must contain an `id` column.
+    - **AI Feature:** If you leave `pm10` cells empty in the CSV, the AI will predict them!
     """)
 
-# ---------------- PROCESSING ----------------
+# ---------------- HELPERS ----------------
+def fuzzy_column_match(df, target_name):
+    """Finds a column in a dataframe ignoring case and extra spaces."""
+    cols = {c.lower().strip(): c for c in df.columns}
+    target = target_name.lower().strip()
+    if target in cols:
+        return cols[target]
+    return None
+
 @st.cache_data
-def load_and_clean_gdf(shp_path_data):
+def load_gdf(shp_path_data):
     with tempfile.TemporaryDirectory() as tmpdir:
         for f_name, f_content in shp_path_data:
             with open(os.path.join(tmpdir, f_name), "wb") as out:
@@ -32,14 +40,13 @@ def load_and_clean_gdf(shp_path_data):
         shp_file = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".shp")][0]
         gdf = gpd.read_file(shp_file)
         
-        # Resolve 'id' column naming issues (Case-insensitive check)
-        possible_id_cols = [c for c in gdf.columns if c.lower() == 'id']
-        if possible_id_cols:
-            gdf = gdf.rename(columns={possible_id_cols[0]: 'id'})
+        # Resolve 'id' column naming
+        id_col = fuzzy_column_match(gdf, 'id')
+        if id_col:
+            gdf = gdf.rename(columns={id_col: 'id'})
         else:
-            st.error(f"❌ No 'id' column found in Shapefile. Available columns: {list(gdf.columns)}")
+            st.error(f"❌ Shapefile is missing an 'id' column. Found: {list(gdf.columns)}")
             st.stop()
-            
         return gdf.to_crs(epsg=3857)
 
 # ---------------- SIDEBAR ----------------
@@ -53,23 +60,31 @@ map_alpha = st.sidebar.slider("Map Transparency", 0.0, 1.0, 0.7)
 # ---------------- MAIN ----------------
 if csv_file and shp_files:
     try:
-        # Load CSV
+        # Load and Clean CSV
         df = pd.read_csv(csv_file)
+        
+        loc_col = fuzzy_column_match(df, 'location_id')
+        pm_col = fuzzy_column_match(df, 'pm10')
+        
+        if not loc_col or not pm_col:
+            st.error(f"❌ CSV columns missing. Required: 'location_id' and 'pm10'. Found: {list(df.columns)}")
+            st.stop()
+            
+        df = df.rename(columns={loc_col: 'location_id', pm_col: 'pm10'})
         df["location_id"] = df["location_id"].astype(str).str.strip()
 
         # Load GDF
         shp_data_blobs = [(f.name, f.getvalue()) for f in shp_files]
-        gdf = load_and_clean_gdf(shp_data_blobs)
+        gdf = load_gdf(shp_data_blobs)
         gdf["id"] = gdf["id"].astype(str).str.strip()
 
         # Merge
         merged = gdf.merge(df, left_on="id", right_on="location_id")
-        
         if merged.empty:
-            st.error("❌ IDs do not match. Check that CSV 'location_id' matches Shapefile 'id'.")
+            st.error("❌ IDs do not match between files.")
             st.stop()
 
-        # ML Gap Filling
+        # AI Gap Filling (Using modern np.ptp logic internally)
         data_present = merged[merged["pm10"].notna()].copy()
         data_missing = merged[merged["pm10"].isna()].copy()
         merged['status'] = 'Original'
@@ -83,7 +98,7 @@ if csv_file and shp_files:
             model.fit(X_train, y_train)
             
             merged.loc[merged["pm10"].isna(), "pm10"] = model.predict(X_predict)
-            merged.loc[merged["pm10"].isna() == False, "status"] = np.where(merged.loc[merged["pm10"].isna() == False, "location_id"].isin(data_missing["location_id"]), "AI Predicted", "Original")
+            merged.loc[merged["location_id"].isin(data_missing["location_id"]), "status"] = "AI Predicted"
 
         # Point to Grid logic
         half = cell_size / 2
@@ -103,6 +118,6 @@ if csv_file and shp_files:
             st.dataframe(merged[['location_id', 'pm10', 'status']])
 
     except Exception as e:
-        st.error(f"⚠️ Error: {e}")
+        st.error(f"⚠️ Process Error: {e}")
 else:
-    st.info("Upload data to start.")
+    st.info("Please upload your files to begin.")
