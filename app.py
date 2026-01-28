@@ -96,17 +96,19 @@ if 'df' in st.session_state:
             
             # Add basemap FIRST (important order: basemap under heatmap)
             # Use ESRI basemap for better detail
-           try:
-    cx.add_basemap(
-        ax,
-        crs="EPSG:4326",
-        source=cx.providers.OpenStreetMap.Mapnik,  # or CartoDB.Positron
-        reset_extent=False,
-        zoom_adjust=-1   # optional but often helps small regions
-    )
-    st.caption("Basemap: © OpenStreetMap contributors")
-except Exception as e:
-    st.warning(f"Could not load basemap: {e}. Continuing without it.")
+                       try:
+                cx.add_basemap(
+                    ax,
+                    crs="EPSG:4326",
+                    source=cx.providers.OpenStreetMap.Mapnik,  # reliable choice
+                    # You can also try: cx.providers.CartoDB.Positron
+                    # or cx.providers.OpenStreetMap.HOT
+                    reset_extent=False,
+                    zoom_adjust=-1   # often helps with small areas like Lucknow
+                )
+                st.caption("Basemap: © OpenStreetMap contributors")
+            except Exception as e:
+                st.warning(f"Could not load basemap: {e}. Continuing without it.")
             # Heatmap layer – customizable alpha, colormap, clip extreme values
             im = ax.imshow(
                 pm_smooth,
