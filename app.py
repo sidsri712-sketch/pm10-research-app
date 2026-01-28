@@ -2,22 +2,22 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-import plotly.express as px
-import plotly.graph_objects as go
-from sklearn.ensemble import RandomForestRegressor
-from scipy.ndimage import gaussian_filter
+import matplotlib.pyplot as plt
+from scipy.interpolate import Rbf
+import io
 import time
 
 # --- CONFIGURATION ---
 TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
 LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
 
-st.set_page_config(page_title="Lucknow PM10 Research Mapper", layout="wide")
+st.set_page_config(page_title="Lucknow PM10 Research Hub", layout="wide")
 
+# Custom CSS for a professional look
 st.markdown("""
     <style>
-    .main { background-color: #f5f7f9; }
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #ff4b4b; color: white; }
+    .stButton>button { width: 100%; background-color: #007bff; color: white; border-radius: 8px; font-weight: bold; }
+    .reportview-container { background: #f0f2f6; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -26,10 +26,10 @@ def get_live_pm10_data():
     url = f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={TOKEN}"
     try:
         r = requests.get(url, timeout=12).json()
-        if r.get('status') != 'ok': return None, "API error."
+        if r.get('status') != 'ok': return None, "API access error."
         stations = r['data']
         processed_data = []
-        bar = st.progress(0, text="Fetching station details...")
+        bar = st.progress(0, text="Fetching scientific data from Lucknow stations...")
         for i, s in enumerate(stations):
             detail_url = f"https://api.waqi.info/feed/@{s['uid']}/?token={TOKEN}"
             try:
@@ -39,7 +39,7 @@ def get_live_pm10_data():
                     if val is not None:
                         processed_data.append({
                             'lat': float(s['lat']), 'lon': float(s['lon']),
-                            'pm10': float(val), 'name': s.get('station', {}).get('name', 'Unknown')
+                            'pm10': float(val), 'name': s.get('station', {}).get('name', 'Station')
                         })
             except: continue
             bar.progress((i + 1) / len(stations))
@@ -48,17 +48,10 @@ def get_live_pm10_data():
         return pd.DataFrame(processed_data), None
     except Exception as e: return None, str(e)
 
-# --- SIDEBAR ---
-st.sidebar.title("🛠️ Settings")
-map_style = st.sidebar.selectbox("Base Map", ["carto-darkmatter", "carto-positron", "open-street-map"])
-# RdYlGn_r is best for Air Quality (Green=Good, Red=Bad)
-color_theme = st.sidebar.selectbox("Palette", ["RdYlGn_r", "Turbo", "Viridis", "YlOrRd"])
-h_opacity = st.sidebar.slider("Opacity", 0.1, 1.0, 0.5)
-radius_val = st.sidebar.slider("Blur Radius", 5, 50, 20)
+st.title("🏙️ Lucknow PM10 Spatial Distribution Analysis")
+st.info("This tool generates publication-quality heatmaps using Radial Basis Function (Rbf) Interpolation.")
 
-st.title("🏙️ Lucknow PM10 Analysis")
-
-if st.button("🚀 Sync Live Data"):
+if st.button("🔄 Sync Current Lucknow Data"):
     df, err = get_live_pm10_data()
     if err: st.error(err)
     elif df is not None and not df.empty: st.session_state['df'] = df
@@ -66,47 +59,53 @@ if st.button("🚀 Sync Live Data"):
 if 'df' in st.session_state:
     df = st.session_state['df']
     
-    # ML INTERPOLATION
-    # Lower resolution (35x35) prevents the "All One Color" overlap in Plotly
-    grid_res = 35 
-    lat_range = np.linspace(df['lat'].min() - 0.01, df['lat'].max() + 0.01, grid_res)
-    lon_range = np.linspace(df['lon'].min() - 0.01, df['lon'].max() + 0.01, grid_res)
-    ln, lt = np.meshgrid(lon_range, lat_range)
+    # --- SCIENTIFIC INTERPOLATION ---
+    # 1. Setup Grid
+    grid_x, grid_y = np.mgrid[df.lon.min():df.lon.max():200j, df.lat.min():df.lat.max():200j]
     
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(df[['lat', 'lon']], df['pm10'])
-    preds = model.predict(np.c_[lt.ravel(), ln.ravel()]).reshape(grid_res, grid_res)
-    preds = gaussian_filter(preds, sigma=1.0) # Sharpens the gradients
+    # 2. Rbf Interpolation (Multiquadric) - Creates clear red/green gradients
+    rbf = Rbf(df.lon, df.lat, df.pm10, function='multiquadric', smooth=0.1)
+    z = rbf(grid_x, grid_y)
 
-    grid_df = pd.DataFrame({'lat': lt.ravel(), 'lon': ln.ravel(), 'pm10': preds.ravel()})
+    # --- MATPLOTLIB PLOTTING ---
+    fig, ax = plt.subplots(figsize=(10, 8), dpi=100)
+    
+    # Plot the interpolated surface
+    # 'RdYlGn_r' ensures High PM10 = Red, Low PM10 = Green
+    im = ax.imshow(z.T, extent=(df.lon.min(), df.lon.max(), df.lat.min(), df.lat.max()), 
+                   origin='lower', cmap='RdYlGn_r', aspect='auto', 
+                   vmin=df.pm10.min(), vmax=df.pm10.max())
+    
+    # Add actual station points for reference
+    ax.scatter(df.lon, df.lat, c='white', edgecolors='black', s=50, label='Stations')
+    
+    # Annotate points with values
+    for i, txt in enumerate(df.pm10):
+        ax.annotate(int(txt), (df.lon.iloc[i], df.lat.iloc[i]), 
+                    textcoords="offset points", xytext=(0,10), ha='center', fontsize=9, fontweight='bold')
 
-    # BUILD THE HEATMAP
-    fig = px.density_mapbox(
-        grid_df, lat='lat', lon='lon', z='pm10',
-        radius=radius_val, 
-        center=dict(lat=26.8467, lon=80.9462),
-        zoom=11,
-        mapbox_style=map_style,
-        color_continuous_scale=color_theme,
-        opacity=h_opacity,
-        # THIS FORCES THE GRADIENT:
-        range_color=[df['pm10'].min(), df['pm10'].max()] 
+    # Formatting for Research Paper
+    plt.colorbar(im, ax=ax, label='PM10 Concentration (µg/m³)')
+    ax.set_title("Lucknow PM10 Spatial Interpolation Map", fontsize=14, pad=20)
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.grid(True, linestyle='--', alpha=0.5)
+
+    # Display in Streamlit
+    st.pyplot(fig)
+
+    # --- PNG EXPORT FOR RESEARCH PAPER ---
+    fn = "Lucknow_PM10_Heatmap.png"
+    img = io.BytesIO()
+    plt.savefig(img, format='png', dpi=300, bbox_inches='tight') # 300 DPI is required for papers
+
+    st.download_button(
+        label="📥 Download PNG for Research Paper (High Res)",
+        data=img.getvalue(),
+        file_name=fn,
+        mime="image/png"
     )
 
-    # Station markers on top
-    fig.add_trace(go.Scattermapbox(
-        lat=df['lat'], lon=df['lon'], mode='markers+text',
-        marker=go.scattermapbox.Marker(size=12, color='white', opacity=0.8),
-        text=df['pm10'].astype(int).astype(str),
-        textposition="top center",
-        hovertext=df['name'],
-        showlegend=False
-    ))
-
-    fig.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, height=700)
-    st.plotly_chart(fig, use_container_width=True)
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Min PM10 (Green)", f"{df['pm10'].min():.0f}")
-    c2.metric("Max PM10 (Red)", f"{df['pm10'].max():.0f}")
-    c3.metric("Avg Level", f"{df['pm10'].mean():.1f}")
+    # Statistics Table
+    st.subheader("Station Data Summary")
+    st.dataframe(df[['name', 'pm10']].sort_values(by='pm10', ascending=False), use_container_width=True)
