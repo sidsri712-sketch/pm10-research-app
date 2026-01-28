@@ -16,120 +16,87 @@ except ImportError:
     st.error("Missing libraries! Please run: pip install rapidfuzz contextily scipy geopandas")
     st.stop()
 
-st.set_page_config(page_title="PM10 Choropleth Analysis", layout="wide")
+st.set_page_config(page_title="PM10 Choropleth Tool", layout="wide")
 
-# --------------------------------------------------
-# SIDEBAR: DATA INPUT
-# --------------------------------------------------
-st.sidebar.header("📁 Step 1: Data Upload")
-csv_file = st.sidebar.file_uploader("Upload Air Quality CSV", type=["csv"])
-shp_files = st.sidebar.file_uploader("Upload Shapefile Set (.shp, .shx, .dbf)", type=["shp", "shx", "dbf"], accept_multiple_files=True)
+st.sidebar.header("📁 Data Upload")
+csv_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+shp_files = st.sidebar.file_uploader("Upload Shapefile Set", type=["shp", "shx", "dbf"], accept_multiple_files=True)
 
-# --------------------------------------------------
-# MAIN PROCESSING
-# --------------------------------------------------
 if csv_file and shp_files:
     try:
         # 1. LOAD DATA
         df = pd.read_csv(csv_file)
-        
         with tempfile.TemporaryDirectory() as tmpdir:
             for f in shp_files:
                 with open(os.path.join(tmpdir, f.name), "wb") as out:
                     out.write(f.getbuffer())
-            
             shp_path = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".shp")][0]
             gdf = gpd.read_file(shp_path)
 
-        # 2. SMART ID COLUMN IDENTIFICATION
+        # 2. MATCHING & CLEANING
         csv_id_col = next((c for c in df.columns if c.lower() in ['location_id', 'id', 'station_id', 'gid']), df.columns[0])
         shp_id_col = next((c for c in gdf.columns if c.lower() in ['location_id', 'id', 'gid', 'name']), gdf.columns[0])
-        
+        pm10_col = next((c for c in df.columns if 'pm10' in c.lower()), None)
+
         df = df.rename(columns={csv_id_col: 'location_id'})
         gdf_clean = gdf.rename(columns={shp_id_col: 'location_id'})
-        
-        df["location_id"] = df["location_id"].astype(str).str.strip()
-        gdf_clean["location_id"] = gdf_clean["location_id"].astype(str).str.strip()
-        
-        # 3. ALIGNMENT & MERGING
-        with st.spinner("Calculating spatial distribution..."):
-            unique_shp_ids = gdf_clean["location_id"].unique().tolist()
-            id_map = {}
-            for cid in df["location_id"].unique():
-                match = process.extractOne(str(cid), unique_shp_ids, scorer=fuzz.WRatio)
-                if match and match[1] > 70:
-                    id_map[cid] = match[0]
 
+        # 3. INTERPOLATION (CHOROPLETH LOGIC)
+        with st.spinner("Generating Choropleth..."):
+            # Fuzzy match to get data onto geometries
+            unique_shp_ids = gdf_clean["location_id"].unique().tolist()
+            id_map = {cid: process.extractOne(str(cid), unique_shp_ids, scorer=fuzz.WRatio)[0] for cid in df["location_id"].unique()}
             df["matched_id"] = df["location_id"].map(id_map)
             
-            pm10_col = next((c for c in df.columns if 'pm10' in c.lower()), None)
-            if not pm10_col:
-                st.error("Could not find a 'PM10' column in your CSV.")
-                st.stop()
-                
             merged_data = gdf_clean.merge(df.dropna(subset=[pm10_col]), left_on="location_id", right_on="matched_id")
 
-            # 4. CHOROPLETH INTERPOLATION
-            # We use known values at centroids to calculate the value for EVERY polygon
-            known_points = merged_data.geometry.centroid
-            known_x = known_points.x.values
-            known_y = known_points.y.values
-            known_z = merged_data[pm10_col].values
-
-            all_centroids = gdf_clean.geometry.centroid
-            grid_x = all_centroids.x.values
-            grid_y = all_centroids.y.values
-
-            # Linear interpolation creates the "gradient" effect across the choropleth
-            grid_z = griddata((known_x, known_y), known_z, (grid_x, grid_y), method='linear')
+            # Interpolate values for EVERY polygon in the shapefile
+            known_coords = np.array([(geom.centroid.x, geom.centroid.y) for geom in merged_data.geometry])
+            known_values = merged_data[pm10_col].values
             
-            # Use 'nearest' to fill in polygons outside the boundary of your sensors
-            nan_mask = np.isnan(grid_z)
+            target_coords = np.array([(geom.centroid.x, geom.centroid.y) for geom in gdf_clean.geometry])
+
+            # Fill the 'Predicted_PM10' column for ALL polygons
+            predictions = griddata(known_coords, known_values, target_coords, method='linear')
+            
+            # Fill edges with nearest neighbor
+            nan_mask = np.isnan(predictions)
             if nan_mask.any():
-                grid_z[nan_mask] = griddata((known_x, known_y), known_z, (grid_x[nan_mask], grid_y[nan_mask]), method='nearest')
+                predictions[nan_mask] = griddata(known_coords, known_values, target_coords[nan_mask], method='nearest')
             
-            # Assign the predicted values back to the shapefile
-            gdf_clean["Predicted_PM10"] = grid_z
+            gdf_clean["Predicted_PM10"] = predictions
 
-        # 5. VISUALIZATION (CHOROPLETH STYLE)
-        st.subheader("🗺️ PM10 Spatial Choropleth Map")
+        # 4. THE PLOT (STRICT CHOROPLETH)
+        st.subheader("🗺️ Regional PM10 Exposure (Choropleth)")
         
-        if gdf_clean.crs is None: 
-            gdf_clean.set_crs(epsg=4326, inplace=True)
-        
+        if gdf_clean.crs is None: gdf_clean.set_crs(epsg=4326, inplace=True)
         gdf_web = gdf_clean.to_crs(epsg=3857)
+
         fig, ax = plt.subplots(figsize=(12, 12))
         
-        # This draws the actual polygons colored by PM10 value
+        # KEY CHANGE: We plot ONLY the dataframe 'gdf_web' 
+        # and use the 'column' argument to fill the shapes.
         gdf_web.plot(
             column="Predicted_PM10", 
             cmap="RdYlGn_r", 
             legend=True, 
-            legend_kwds={'label': "PM10 Concentration (µg/m³)", 'orientation': "horizontal", 'pad': 0.02, 'shrink': 0.8},
             ax=ax, 
-            alpha=0.6,          # Makes the satellite map visible through the color
-            edgecolor='white',  # Draws thin white lines between polygons for clarity
-            linewidth=0.4
+            alpha=0.7, 
+            edgecolor='black', # Thin borders to distinguish districts
+            linewidth=0.5,
+            legend_kwds={'label': "PM10 (µg/m³)", 'orientation': "horizontal", 'pad': 0.01}
         )
         
-        # Add high-resolution satellite imagery
         cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery)
         ax.set_axis_off()
         st.pyplot(fig)
 
-        # 6. EXPORT
-        st.divider()
-        c1, c2 = st.columns(2)
-        with c1:
-            buf = io.BytesIO()
-            plt.savefig(buf, format="png", dpi=300, bbox_inches='tight')
-            st.download_button("🖼️ Download Map (PNG)", buf.getvalue(), "pm10_choropleth.png", "image/png")
-        with c2:
-            csv_out = gdf_clean[['location_id', 'Predicted_PM10']].to_csv(index=False).encode('utf-8')
-            st.download_button("📊 Download Polygon Results (CSV)", csv_out, "interpolated_results.csv", "text/csv")
+        # 5. DOWNLOAD
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=300, bbox_inches='tight')
+        st.download_button("🖼️ Download Choropleth Map", buf.getvalue(), "pm10_choropleth.png")
 
     except Exception as e:
-        st.error(f"Error during processing: {e}")
-
+        st.error(f"Error: {e}")
 else:
-    st.info("Upload your CSV and Shapefile set to generate the choropleth.")
+    st.info("Awaiting file uploads...")
