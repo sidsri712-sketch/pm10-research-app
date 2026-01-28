@@ -8,6 +8,6 @@ pyproj>=3.6
 shapely>=2.0
 geopandas>=0.14
 pykrige>=1.7
-meteostat>=1.6
+meteostat
 requests>=2.31
 streamlit>=1.30
