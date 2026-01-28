@@ -26,7 +26,7 @@ csv_file = st.sidebar.file_uploader("Upload Air Quality CSV", type=["csv"])
 shp_files = st.sidebar.file_uploader("Upload Shapefile Set (.shp, .shx, .dbf)", type=["shp", "shx", "dbf"], accept_multiple_files=True)
 
 # --------------------------------------------------
-# MAIN PROCESSING (Wrapped in a single try/except block)
+# MAIN PROCESSING
 # --------------------------------------------------
 if csv_file and shp_files:
     try:
@@ -45,7 +45,7 @@ if csv_file and shp_files:
             
             gdf = gpd.read_file(os.path.join(tmpdir, shp_list[0]))
 
-        # 2. DATA TYPE SAFETY (Prevents "int has no len" and "merge on int64/object" errors)
+        # 2. DATA TYPE SAFETY (Prevents "int has no len" and merge errors)
         csv_id_col = next((c for c in df.columns if c.lower() in ['location_id', 'id', 'station_id', 'gid']), df.columns[0])
         shp_id_col = next((c for c in gdf.columns if c.lower() in ['location_id', 'id', 'gid', 'name']), gdf.columns[0])
         pm10_col = next((c for c in df.columns if 'pm10' in c.lower()), None)
@@ -54,16 +54,16 @@ if csv_file and shp_files:
             st.error("Could not find a 'PM10' column in your CSV.")
             st.stop()
 
-        # Force all IDs to strings immediately
+        # FORCE ALL IDs TO STRINGS IMMEDIATELY
         df[csv_id_col] = df[csv_id_col].astype(str).str.strip()
         gdf[shp_id_col] = gdf[shp_id_col].astype(str).str.strip()
 
         # 3. FUZZY JOIN
-        with st.spinner("Aligning geographic data..."):
+        with st.spinner("Aligning geographic boundaries..."):
             shp_ids = gdf[shp_id_col].unique().tolist()
             id_map = {}
             for cid in df[csv_id_col].unique():
-                # Matching logic that works for both numbers and strings
+                # Ensure input is string to avoid TypeErrors
                 match = process.extractOne(str(cid), shp_ids, scorer=fuzz.WRatio)
                 if match and match[1] > 60:
                     id_map[cid] = match[0]
@@ -71,18 +71,18 @@ if csv_file and shp_files:
             df["matched_id"] = df[csv_id_col].map(id_map)
             merged_data = gdf.merge(df.dropna(subset=[pm10_col]), left_on=shp_id_col, right_on="matched_id")
 
-        # 4. CREATE SOLID HEATMAP SURFACE (The "No Dots" Solution)
+        # 4. CREATE SOLID INTERPOLATED SURFACE (Heatmap Logic)
         with st.spinner("Generating continuous surface map..."):
-            # Set the boundary for our solid color area
+            # Define the boundary for our solid color area
             xmin, ymin, xmax, ymax = gdf.total_bounds
-            # Increase grid resolution (250x250 pixels) for a sharper map
-            grid_x, grid_y = np.mgrid[xmin:xmax:250j, ymin:ymax:250j]
+            # Increase grid resolution for a sharp, high-res look
+            grid_x, grid_y = np.mgrid[xmin:xmax:300j, ymin:ymax:300j]
             
-            # Points where we have sensor data
+            # Points where we have sensor data (centroids)
             known_coords = np.array([(p.x, p.y) for p in merged_data.geometry.centroid])
             known_values = merged_data[pm10_col].values
 
-            # Interpolate to fill the entire area with color
+            # Interpolate to create a solid surface instead of dots
             grid_z = griddata(known_coords, known_values, (grid_x, grid_y), method='linear')
             
             # Fill outer edges with nearest sensor data for a completely solid look
@@ -90,7 +90,7 @@ if csv_file and shp_files:
             if nan_mask.any():
                 grid_z[nan_mask] = griddata(known_coords, known_values, (grid_x[nan_mask], grid_y[nan_mask]), method='nearest')
 
-        # 5. VISUALIZATION
+        # 5. VISUALIZATION (SOLID RENDERING)
         st.subheader("🗺️ Continuous PM10 Exposure Map")
         
         if gdf.crs is None: 
@@ -98,11 +98,11 @@ if csv_file and shp_files:
         
         fig, ax = plt.subplots(figsize=(12, 12))
         
-        # Plot the solid color surface (imshow)
+        # Plot the solid color surface (imshow) - NOT a scatter plot
         im = ax.imshow(grid_z.T, extent=(xmin, xmax, ymin, ymax), 
                        origin='lower', cmap='RdYlGn_r', alpha=0.6, interpolation='bilinear')
         
-        # Overlay original boundaries for context
+        # Overlay original boundaries for research context
         gdf.plot(ax=ax, color='none', edgecolor='white', linewidth=0.5, alpha=0.3)
         
         # Add high-resolution satellite imagery
@@ -118,11 +118,13 @@ if csv_file and shp_files:
         with c1:
             buf = io.BytesIO()
             plt.savefig(buf, format="png", dpi=300, bbox_inches='tight')
-            st.download_button("🖼️ Download Map (PNG)", buf.getvalue(), "solid_pm10_map.png", "image/png")
+            st.download_button("🖼️ Download Solid Map (PNG)", buf.getvalue(), "solid_pm10_map.png", "image/png")
         with c2:
-            st.success("Solid distribution analysis complete.")
+            st.success("Solid distribution analysis complete. Map ready for download.")
 
     except Exception as e:
-        st.error(f"Critical Error: {e}")
+        # This catches all processing errors and displays them safely
+        st.error(f"Execution Error: {e}")
+
 else:
     st.info("Upload your CSV and Shapefile set to generate the solid distribution map.")
