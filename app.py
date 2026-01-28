@@ -9,7 +9,7 @@ from scipy.ndimage import gaussian_filter
 import io
 
 # --- CONFIG ---
-TOKEN = "YOUR_WAQI_API_TOKEN" 
+TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78" 
 # Expanded bounds to ensure enough data points for a "spread" effect
 LUCKNOW_BOUNDS = "26.65,80.70,27.00,81.15" 
 
