@@ -16,7 +16,7 @@ except ImportError:
     st.error("Missing libraries! Please run: pip install rapidfuzz contextily scipy geopandas")
     st.stop()
 
-st.set_page_config(page_title="PM10 Spatial Analysis Tool", layout="wide")
+st.set_page_config(page_title="PM10 Choropleth Analysis", layout="wide")
 
 # --------------------------------------------------
 # SIDEBAR: DATA INPUT
@@ -51,13 +51,13 @@ if csv_file and shp_files:
         df["location_id"] = df["location_id"].astype(str).str.strip()
         gdf_clean["location_id"] = gdf_clean["location_id"].astype(str).str.strip()
         
-        # 3. FUZZY JOIN
-        with st.spinner("Aligning datasets and interpolating..."):
+        # 3. ALIGNMENT & MERGING
+        with st.spinner("Calculating spatial distribution..."):
             unique_shp_ids = gdf_clean["location_id"].unique().tolist()
             id_map = {}
             for cid in df["location_id"].unique():
                 match = process.extractOne(str(cid), unique_shp_ids, scorer=fuzz.WRatio)
-                if match and match[1] > 70: # Relaxed to 70 for better matching
+                if match and match[1] > 70:
                     id_map[cid] = match[0]
 
             df["matched_id"] = df["location_id"].map(id_map)
@@ -69,46 +69,50 @@ if csv_file and shp_files:
                 
             merged_data = gdf_clean.merge(df.dropna(subset=[pm10_col]), left_on="location_id", right_on="matched_id")
 
-        # 4. SPATIAL INTERPOLATION
-        # Use Centroids for calculation
-        known_points = merged_data.geometry.centroid
-        known_x = known_points.x.values
-        known_y = known_points.y.values
-        known_z = merged_data[pm10_col].values
+            # 4. CHOROPLETH INTERPOLATION
+            # We use known values at centroids to calculate the value for EVERY polygon
+            known_points = merged_data.geometry.centroid
+            known_x = known_points.x.values
+            known_y = known_points.y.values
+            known_z = merged_data[pm10_col].values
 
-        all_centroids = gdf_clean.geometry.centroid
-        grid_x = all_centroids.x.values
-        grid_y = all_centroids.y.values
+            all_centroids = gdf_clean.geometry.centroid
+            grid_x = all_centroids.x.values
+            grid_y = all_centroids.y.values
 
-        grid_z = griddata((known_x, known_y), known_z, (grid_x, grid_y), method='linear')
-        
-        # Fill NaNs using nearest neighbor for edge polygons
-        nan_mask = np.isnan(grid_z)
-        if nan_mask.any():
-            grid_z[nan_mask] = griddata((known_x, known_y), known_z, (grid_x[nan_mask], grid_y[nan_mask]), method='nearest')
-        
-        gdf_clean["Predicted_PM10"] = grid_z
+            # Linear interpolation creates the "gradient" effect across the choropleth
+            grid_z = griddata((known_x, known_y), known_z, (grid_x, grid_y), method='linear')
+            
+            # Use 'nearest' to fill in polygons outside the boundary of your sensors
+            nan_mask = np.isnan(grid_z)
+            if nan_mask.any():
+                grid_z[nan_mask] = griddata((known_x, known_y), known_z, (grid_x[nan_mask], grid_y[nan_mask]), method='nearest')
+            
+            # Assign the predicted values back to the shapefile
+            gdf_clean["Predicted_PM10"] = grid_z
 
-        # 5. VISUALIZATION
-        st.subheader("📍 PM10 Spatial Distribution Map")
+        # 5. VISUALIZATION (CHOROPLETH STYLE)
+        st.subheader("🗺️ PM10 Spatial Choropleth Map")
         
         if gdf_clean.crs is None: 
             gdf_clean.set_crs(epsg=4326, inplace=True)
         
         gdf_web = gdf_clean.to_crs(epsg=3857)
-        fig, ax = plt.subplots(figsize=(10, 10))
+        fig, ax = plt.subplots(figsize=(12, 12))
         
+        # This draws the actual polygons colored by PM10 value
         gdf_web.plot(
             column="Predicted_PM10", 
             cmap="RdYlGn_r", 
             legend=True, 
-            legend_kwds={'label': "PM10 (µg/m³)", 'orientation': "horizontal", 'pad': 0.02},
+            legend_kwds={'label': "PM10 Concentration (µg/m³)", 'orientation': "horizontal", 'pad': 0.02, 'shrink': 0.8},
             ax=ax, 
-            alpha=0.6, 
-            edgecolor='white',
-            linewidth=0.3
+            alpha=0.6,          # Makes the satellite map visible through the color
+            edgecolor='white',  # Draws thin white lines between polygons for clarity
+            linewidth=0.4
         )
         
+        # Add high-resolution satellite imagery
         cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery)
         ax.set_axis_off()
         st.pyplot(fig)
@@ -119,13 +123,13 @@ if csv_file and shp_files:
         with c1:
             buf = io.BytesIO()
             plt.savefig(buf, format="png", dpi=300, bbox_inches='tight')
-            st.download_button("🖼️ Download Map (PNG)", buf.getvalue(), "pm10_map.png", "image/png")
+            st.download_button("🖼️ Download Map (PNG)", buf.getvalue(), "pm10_choropleth.png", "image/png")
         with c2:
             csv_out = gdf_clean[['location_id', 'Predicted_PM10']].to_csv(index=False).encode('utf-8')
-            st.download_button("📊 Download CSV Data", csv_out, "results.csv", "text/csv")
+            st.download_button("📊 Download Polygon Results (CSV)", csv_out, "interpolated_results.csv", "text/csv")
 
     except Exception as e:
         st.error(f"Error during processing: {e}")
 
 else:
-    st.info("Please upload both a CSV and a Shapefile set to generate the map.")
+    st.info("Upload your CSV and Shapefile set to generate the choropleth.")
