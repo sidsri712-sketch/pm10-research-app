@@ -9,7 +9,7 @@ from scipy.ndimage import gaussian_filter
 import io
 
 # --- CONFIG ---
-TOKEN = "YOUR_WAQI_API_TOKEN" 
+TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78" 
 LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05" 
 
 st.set_page_config(page_title="Lucknow PM10 Analysis", layout="wide")
