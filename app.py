@@ -96,7 +96,7 @@ if 'df' in st.session_state:
             
             # Add basemap FIRST (important order: basemap under heatmap)
             # Use ESRI basemap for better detail
-                       try:
+            try:
                 cx.add_basemap(
                     ax,
                     crs="EPSG:4326",
