@@ -3,9 +3,7 @@ pandas
 geopandas
 numpy
 matplotlib
-scikit-learn
-rapidfuzz
-shap
-pyproj
 contextily
 scipy
+rasterio
+affine
