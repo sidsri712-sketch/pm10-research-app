@@ -6,10 +6,11 @@ import matplotlib.pyplot as plt
 import contextily as cx
 from sklearn.ensemble import RandomForestRegressor
 from scipy.ndimage import gaussian_filter
+from pyproj import Transformer
 import io
 import time
 
-TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"  # get from https://aqicn.org/data-platform/token/
+TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
 LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
 
 st.set_page_config(page_title="Lucknow PM10 Analysis", layout="wide")
@@ -58,137 +59,81 @@ if st.button("Fetch Live PM10 Data"):
         df, error = get_live_pm10_data()
 
     if error:
-        st.error(f"Data fetch failed: {error}\nCheck token and internet.")
+        st.error(error)
     elif df.empty:
-        st.warning("No stations with valid PM10 data found in this bounding box right now.")
+        st.warning("No valid PM10 data found.")
     else:
-        st.success(f"Found {len(df)} stations with PM10 readings.")
+        st.success(f"Found {len(df)} stations.")
         st.session_state["df"] = df
 
 if "df" in st.session_state:
     df = st.session_state["df"]
 
-    st.subheader("Customize Heatmap")
-    opacity = st.slider("Heatmap Opacity", 0.1, 1.0, 0.75, 0.05)
-    transparency = st.slider("Station Transparency (Alpha)", 0.1, 1.0, 1.0, 0.05)
+    opacity = st.slider("Heatmap Opacity", 0.2, 1.0, 0.75, 0.05)
 
-    # Multi-colour heatmap palettes
     cmap_options = [
         "turbo",
-        "jet",
+        "Spectral",
         "viridis",
         "plasma",
         "inferno",
-        "magma",
-        "Spectral",
         "coolwarm"
     ]
-    selected_cmap = st.selectbox("Heatmap Color Scheme", cmap_options, index=0)
+    selected_cmap = st.selectbox("Heatmap Colors", cmap_options)
 
-    show_labels = st.checkbox("Show PM10 Values on Stations", value=True)
+    if st.button("Generate Heatmap"):
+        res = 180
 
-    if st.button("Generate Customized Heatmap"):
-        with st.spinner("Creating ML-based smooth heatmap..."):
-            res = 180
-            lat_idx = np.linspace(df["lat"].min(), df["lat"].max(), res)
-            lon_idx = np.linspace(df["lon"].min(), df["lon"].max(), res)
-            lon_grid, lat_grid = np.meshgrid(lon_idx, lat_idx)
+        lat = np.linspace(df.lat.min(), df.lat.max(), res)
+        lon = np.linspace(df.lon.min(), df.lon.max(), res)
+        lon_grid, lat_grid = np.meshgrid(lon, lat)
 
-            X = df[["lat", "lon"]].values
-            y = df["pm10"].values
+        model = RandomForestRegressor(n_estimators=60, random_state=42, n_jobs=-1)
+        model.fit(df[["lat", "lon"]], df["pm10"])
 
-            model = RandomForestRegressor(
-                n_estimators=60,
-                random_state=42,
-                n_jobs=-1
-            )
-            model.fit(X, y)
+        pm = model.predict(np.c_[lat_grid.ravel(), lon_grid.ravel()]).reshape(res, res)
+        pm = gaussian_filter(pm, sigma=5)
 
-            pm_pred = model.predict(
-                np.c_[lat_grid.ravel(), lon_grid.ravel()]
-            ).reshape(res, res)
+        # ---- CRS TRANSFORMATION (FIX) ----
+        transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+        xmin, ymin = transformer.transform(lon.min(), lat.min())
+        xmax, ymax = transformer.transform(lon.max(), lat.max())
 
-            pm_smooth = gaussian_filter(pm_pred, sigma=5)
+        fig, ax = plt.subplots(figsize=(14, 12))
 
-            fig, ax = plt.subplots(figsize=(14, 12))
-            extent = [lon_idx.min(), lon_idx.max(), lat_idx.min(), lat_idx.max()]
+        im = ax.imshow(
+            pm,
+            extent=[xmin, xmax, ymin, ymax],
+            origin="lower",
+            cmap=selected_cmap,
+            alpha=opacity,
+            vmin=0,
+            vmax=np.percentile(df.pm10, 95),
+            zorder=2
+        )
 
-            # ESRI basemap
-            try:
-                cx.add_basemap(
-                    ax,
-                    source=cx.providers.Esri.WorldImagery,
-                    crs="EPSG:4326",
-                    reset_extent=False
-                )
-                st.caption("Basemap: © ESRI World Imagery")
-            except Exception as e:
-                st.warning(f"Could not load basemap: {e}. Continuing without it.")
+        # Stations (reprojected)
+        xs, ys = transformer.transform(df.lon.values, df.lat.values)
+        ax.scatter(xs, ys, c="black", s=60, edgecolors="white", zorder=3)
 
-            im = ax.imshow(
-                pm_smooth,
-                extent=extent,
-                origin="lower",
-                cmap=selected_cmap,
-                alpha=opacity,
-                interpolation="bilinear",
-                vmin=0,
-                vmax=250,
-                zorder=1
-            )
+        cx.add_basemap(
+            ax,
+            source=cx.providers.Esri.WorldImagery,
+            zoom=12
+        )
 
-            ax.scatter(
-                df["lon"], df["lat"],
-                c="black",
-                s=60,
-                edgecolors="white",
-                linewidth=1.5,
-                alpha=transparency,
-                zorder=3
-            )
+        fig.colorbar(im, ax=ax, label="PM10 (µg/m³)", shrink=0.6)
+        ax.set_axis_off()
 
-            if show_labels:
-                for _, row in df.iterrows():
-                    ax.text(
-                        row["lon"],
-                        row["lat"],
-                        f"{row['pm10']:.0f}",
-                        fontsize=8,
-                        ha="center",
-                        va="bottom",
-                        color="cyan",
-                        zorder=4
-                    )
+        st.pyplot(fig, use_container_width=True)
 
-            cbar = fig.colorbar(
-                im,
-                ax=ax,
-                label="PM10 (µg/m³)",
-                shrink=0.6,
-                pad=0.04
-            )
+        buf = io.BytesIO()
+        fig.savefig(buf, dpi=600, bbox_inches="tight")
+        buf.seek(0)
 
-            ax.set_title(
-                f"Interpolated PM10 Heatmap – Lucknow\n"
-                f"({len(df)} stations • {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')})",
-                fontsize=14,
-                pad=15
-            )
-
-            ax.set_axis_off()
-            ax.set_xlim(lon_idx.min(), lon_idx.max())
-            ax.set_ylim(lat_idx.min(), lat_idx.max())
-            fig.tight_layout(pad=0.5)
-
-            st.pyplot(fig, use_container_width=True)
-
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png", dpi=600, bbox_inches="tight", pad_inches=0.1)
-            buf.seek(0)
-
-            st.download_button(
-                label="💾 Download High-Res PNG (600 DPI)",
-                data=buf,
-                file_name="lucknow_pm10_heatmap.png",
-                mime="image/png"
-            )
+        st.download_button(
+            "💾 Download PNG",
+            buf,
+            "lucknow_pm10_esri.png",
+            "image/png"
+        )
