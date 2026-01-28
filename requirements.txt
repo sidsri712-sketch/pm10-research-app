@@ -1,3 +1,4 @@
+streamlit
 pandas
 numpy
 matplotlib
@@ -5,5 +6,5 @@ contextily
 scikit-learn
 requests
 scipy
-folium
 streamlit-folium
+folium
