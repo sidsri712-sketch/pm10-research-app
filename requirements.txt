@@ -6,3 +6,10 @@ matplotlib==3.9.3
 contextily==1.6.1
 scipy==1.14.1
 scikit-learn==1.5.2
+streamlit
+pandas
+numpy
+requests
+plotly
+scikit-learn
+scipy
