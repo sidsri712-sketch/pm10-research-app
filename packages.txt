@@ -1,4 +1,1 @@
-libgdal-dev
-g++
-libproj-dev
-binutils
+
