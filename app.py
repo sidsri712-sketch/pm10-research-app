@@ -1,4 +1,4 @@
-```python
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -165,4 +165,3 @@ if 'df' in st.session_state:
                 file_name="lucknow_pm10_heatmap.png",
                 mime="image/png"
             )
-```
