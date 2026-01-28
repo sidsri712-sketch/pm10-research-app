@@ -31,7 +31,7 @@ def fetch_pm10():
                     "lat": s["lat"],
                     "lon": s["lon"],
                     "pm10": dr["data"]["iaqi"]["pm10"]["v"],
-                    "name": dr["data"]["citycity"]["name"]
+                    "name": dr["data"]["city"]["name"]  # FIXED HERE
                 })
             time.sleep(0.2)
 
@@ -99,8 +99,13 @@ if st.button("🚀 Run ML + Validation"):
 
     with col1:
         fig, ax = plt.subplots(figsize=(10, 8))
-        im = ax.imshow(z, extent=[xmin, xmax, ymin, ymax],
-                       origin="lower", cmap="YlOrRd", alpha=opacity)
+        im = ax.imshow(
+            z,
+            extent=[xmin, xmax, ymin, ymax],
+            origin="lower",
+            cmap="YlOrRd",
+            alpha=opacity
+        )
         ax.scatter(xs, ys, c="black", s=40, edgecolors="white", zorder=3)
         cx.add_basemap(ax, source=cx.providers.CartoDB.Positron, zoom=12)
         fig.colorbar(im, label="Predicted PM10 (µg/m³)")
@@ -112,17 +117,26 @@ if st.button("🚀 Run ML + Validation"):
         st.metric("City Mean PM10", f"{z.mean():.1f} µg/m³")
 
         st.write("**Spatial Feature Importance**")
-        st.bar_chart(pd.DataFrame({
-            "Feature": ["Latitude", "Longitude"],
-            "Importance": model.feature_importances_
-        }).set_index("Feature"))
+        st.bar_chart(
+            pd.DataFrame({
+                "Feature": ["Latitude", "Longitude"],
+                "Importance": model.feature_importances_
+            }).set_index("Feature")
+        )
 
         df["Predicted_PM10"] = y
         st.write("**High-Risk Stations**")
-        st.table(df[["name", "Predicted_PM10"]]
-                 .sort_values("Predicted_PM10", ascending=False))
+        st.table(
+            df[["name", "Predicted_PM10"]]
+            .sort_values("Predicted_PM10", ascending=False)
+        )
 
         csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download Dataset", csv, "lucknow_pm10.csv", "text/csv")
+        st.download_button(
+            "Download Dataset",
+            csv,
+            "lucknow_pm10.csv",
+            "text/csv"
+        )
 
 st.caption("LOOCV-validated Kriging with ML-based environmental scenario simulation.")
