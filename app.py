@@ -76,29 +76,73 @@ if st.button("Generate High-Res PM10 Heatmap"):
             pm_pred = model.predict(np.c_[lat_grid.ravel(), lon_grid.ravel()]).reshape(res, res)
             pm_smooth = gaussian_filter(pm_pred, sigma=5)
             
-            fig, ax = plt.subplots(figsize=(12, 10))
+            # --- Plotting improvements ---
+            fig, ax = plt.subplots(figsize=(14, 12))  # slightly larger for better visibility
             extent = [lon_idx.min(), lon_idx.max(), lat_idx.min(), lat_idx.max()]
-            
-            im = ax.imshow(pm_smooth, extent=extent, origin='lower',
-                           cmap='OrRd', alpha=0.65, interpolation='bilinear', vmin=0, vmax=250)
-            
-            cx.add_basemap(ax, crs="EPSG:4326", source=cx.providers.CartoDB.PositronNoLabels)
-            
-            ax.scatter(df['lon'], df['lat'], c='black', s=40, edgecolors='white', linewidth=1.2, label='Stations')
-            
-            cbar = plt.colorbar(im, ax=ax, label='PM10  (µg/m³)', shrink=0.6, pad=0.03)
-            cbar.ax.tick_params(labelsize=9)
-            
-            ax.set_title(f"Lucknow PM10 – {len(df)} stations interpolated", fontsize=13)
+
+            # Heatmap layer – increase alpha, use stronger colormap, clip extreme values
+            im = ax.imshow(
+                pm_smooth,
+                extent=extent,
+                origin='lower',
+                cmap='OrRd',           # strong red/orange for pollution
+                alpha=0.75,            # make it more visible
+                interpolation='bilinear',
+                vmin=0,
+                vmax=250,              # adjust vmax based on Lucknow's typical PM10 (can be dynamic: np.percentile(y, 95))
+                zorder=1               # ensure it's below points but above basemap if needed
+            )
+
+            # Add basemap FIRST (important order: basemap under heatmap)
+            # Use a slightly darker provider for better contrast
+            try:
+                cx.add_basemap(
+                    ax,
+                    crs="EPSG:4326",
+                    source=cx.providers.CartoDB.PositronNoLabels,  # light but clean
+                    # Alternative for more contrast: cx.providers.OpenStreetMap.Mapnik or Stamen.TonerLite
+                    zoom_adjust=0,   # sometimes helps tile fetching
+                    reset_extent=False  # critical: prevents zooming out and blanking
+                )
+            except Exception as e:
+                st.warning(f"Basemap fetch issue: {e}. Showing without basemap.")
+
+            # Stations on top
+            ax.scatter(
+                df['lon'], df['lat'],
+                c='black', s=60, edgecolors='white', linewidth=1.5,
+                label='Monitoring Stations', zorder=3
+            )
+
+            # Colorbar with better placement & label
+            cbar = fig.colorbar(
+                im, ax=ax, label='PM10 (µg/m³)', shrink=0.6, pad=0.04,
+                orientation='vertical'
+            )
+            cbar.ax.tick_params(labelsize=10)
+
+            # Title & cosmetics
+            ax.set_title(
+                f"Interpolated PM10 Heatmap – Lucknow\n({len(df)} stations • {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')})",
+                fontsize=14, pad=15
+            )
             ax.set_axis_off()
-            
-            st.pyplot(fig)
-            
+
+            # Force axis limits to match data extent (prevents cropping)
+            ax.set_xlim(lon_idx.min(), lon_idx.max())
+            ax.set_ylim(lat_idx.min(), lat_idx.max())
+
+            # Tight layout to use full figure space
+            fig.tight_layout(pad=0.5)
+
+            st.pyplot(fig, use_container_width=True)  # better Streamlit integration
+
+            # Download (higher DPI for print quality)
             buf = io.BytesIO()
-            fig.savefig(buf, format="png", dpi=500, bbox_inches='tight')
+            fig.savefig(buf, format="png", dpi=600, bbox_inches='tight', pad_inches=0.1)
             buf.seek(0)
             st.download_button(
-                label="💾 Download High-Res PNG (500 DPI)",
+                label="💾 Download High-Res PNG (600 DPI)",
                 data=buf,
                 file_name="lucknow_pm10_heatmap.png",
                 mime="image/png"
