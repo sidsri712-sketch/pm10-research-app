@@ -6,5 +6,3 @@ contextily
 scikit-learn
 requests
 scipy
-streamlit-folium
-folium
