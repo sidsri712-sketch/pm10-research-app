@@ -6,11 +6,8 @@ import matplotlib.pyplot as plt
 import contextily as cx
 from shapely.geometry import box, Point
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.impute import SimpleImputer
-import io
-import tempfile
-import os
 import warnings
+
 warnings.filterwarnings('ignore')
 
 # ---------------- CONFIG ----------------
@@ -27,199 +24,125 @@ st.markdown("---")
 with st.expander("📖 Instructions", expanded=False):
     st.markdown("""
     **CSV Requirements:**
-    - `location_id` (matches shapefile `id`)
-    - `pm10` (numeric PM10 values)
-    
-    **Shapefile Requirements:**
-    - Must contain `id` column (case-insensitive)
-    - Supports `.shp`, `.shx`, `.dbf`, `.prj` files
+    - `lat` / `latitude`: Numeric latitude
+    - `lon` / `longitude`: Numeric longitude
+    - `pm10`: Numeric PM10 values (missing values are okay!)
     
     **Features:**
-    - ✅ Auto-fills missing PM10 values with ML
-    - ✅ Converts points to customizable grid
-    - ✅ Interactive map with basemap
-    - ✅ Data validation & error handling
+    - ✅ **No Shapefile needed**: Uses Lat/Lon from CSV
+    - ✅ **ML Gap Filling**: Predicts PM10 for rows with missing values based on location
+    - ✅ **Auto-Gridding**: Converts points to square heatmap cells
     """)
 
 # ---------------- PROCESSING FUNCTIONS ----------------
-@st.cache_data
-def load_and_clean_gdf(shp_path_data):
-    """Load and clean shapefile data"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        for f_name, f_content in shp_path_data:
-            with open(os.path.join(tmpdir, f_name), "wb") as out:
-                out.write(f_content)
-        
-        shp_file = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) 
-                   if f.endswith(".shp")][0]
-        gdf = gpd.read_file(shp_file)
-        
-        # Handle ID column (case-insensitive)
-        id_cols = [c for c in gdf.columns if c.lower() == 'id']
-        if not id_cols:
-            st.error(f"❌ No 'id' column found. Available: {list(gdf.columns)}")
-            st.stop()
-        
-        gdf = gdf.rename(columns={id_cols[0]: 'id'})
-        gdf["id"] = gdf["id"].astype(str).str.strip()
-        
-        return gdf.to_crs(epsg=3857)
+def validate_and_geo_csv(df):
+    """Ensure CSV has lat/lon and convert to GeoDataFrame"""
+    cols = df.columns.str.lower()
+    lat_col = next((c for c in df.columns if c.lower() in ['lat', 'latitude']), None)
+    lon_col = next((c for c in df.columns if c.lower() in ['lon', 'longitude', 'long']), None)
+    pm10_col = next((c for c in df.columns if c.lower() == 'pm10'), None)
 
-def validate_csv(df):
-    """Validate CSV structure"""
-    required_cols = ['location_id', 'pm10']
-    missing_cols = [col for col in required_cols if col not in df.columns]
+    if not lat_col or not lon_col or not pm10_col:
+        st.error(f"❌ Missing required columns. Found: {list(df.columns)}")
+        st.info("Ensure your CSV has: 'lat', 'lon', and 'pm10'")
+        return None
     
-    if missing_cols:
-        st.error(f"❌ Missing columns: {missing_cols}")
-        return False
+    # Drop rows where coordinates are missing (cannot map those)
+    df = df.dropna(subset=[lat_col, lon_col])
     
-    df["location_id"] = df["location_id"].astype(str).str.strip()
-    return True
+    # Convert to GeoDataFrame (WGS84 initially)
+    gdf = gpd.GeoDataFrame(
+        df, 
+        geometry=gpd.points_from_xy(df[lon_col], df[lat_col]),
+        crs="EPSG:4326"
+    )
+    # Convert to Web Mercator for accurate km-based buffering and basemaps
+    return gdf.to_crs(epsg=3857), pm10_col
 
-def ml_fill_gaps(merged):
+def ml_fill_gaps(gdf, pm10_col):
     """ML-based gap filling for missing PM10 values"""
-    data_present = merged[merged["pm10"].notna()].copy()
-    data_missing = merged[merged["pm10"].isna()].copy()
+    data_present = gdf[gdf[pm10_col].notna()].copy()
+    data_missing = gdf[gdf[pm10_col].isna()].copy()
     
     if data_missing.empty or len(data_present) < 3:
-        return merged
+        gdf['status'] = 'Original'
+        return gdf
     
-    # Extract coordinates
     X_train = np.column_stack([data_present.geometry.x, data_present.geometry.y])
-    y_train = data_present["pm10"].values
-    
+    y_train = data_present[pm10_col].values
     X_predict = np.column_stack([data_missing.geometry.x, data_missing.geometry.y])
     
-    # Train ML model
     model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
     model.fit(X_train, y_train)
     
-    # Predict missing values
     predictions = model.predict(X_predict)
-    merged.loc[merged["pm10"].isna(), "pm10"] = predictions
+    gdf.loc[gdf[pm10_col].isna(), pm10_col] = predictions
     
-    # Track prediction status
-    merged['status'] = 'Original'
-    merged.loc[merged.index.isin(data_missing.index), 'status'] = 'AI Predicted'
+    gdf['status'] = 'Original'
+    gdf.loc[gdf.index.isin(data_missing.index), 'status'] = 'AI Predicted'
     
-    return merged
+    return gdf
 
 # ---------------- SIDEBAR ----------------
 st.sidebar.header("📁 Data Upload")
-csv_file = st.sidebar.file_uploader("📊 CSV File", type=["csv"], help="location_id + pm10 columns")
-shp_files = st.sidebar.file_uploader(
-    "🗺️ Shapefile Set", 
-    type=["shp", "shx", "dbf", "prj"], 
-    accept_multiple_files=True,
-    help="Upload all related files (.shp, .shx, .dbf, .prj)"
-)
+csv_file = st.sidebar.file_uploader("📊 CSV File", type=["csv"])
 
 st.sidebar.header("🎛️ Map Settings")
-cell_size = st.sidebar.slider("Grid Size (km)", 1, 100, 25, help="Size of each grid square")
-map_alpha = st.sidebar.slider("Map Transparency", 0.1, 1.0, 0.7, 0.1)
-color_scheme = st.sidebar.selectbox("Color Scheme", ["RdYlGn_r", "Reds", "viridis", "plasma"])
-
-st.sidebar.markdown("---")
-st.sidebar.caption("💡 ML auto-fills missing PM10 values")
+cell_size = st.sidebar.slider("Grid Size (km)", 1, 50, 5)
+map_alpha = st.sidebar.slider("Map Transparency", 0.1, 1.0, 0.7)
+color_scheme = st.sidebar.selectbox("Color Scheme", ["RdYlGn_r", "viridis", "YlOrRd"])
 
 # ---------------- MAIN APP ----------------
-if csv_file and shp_files:
-    with st.spinner("🔄 Processing your data..."):
-        try:
-            # Load and validate data
-            df = pd.read_csv(csv_file)
-            if not validate_csv(df):
-                st.stop()
+if csv_file:
+    try:
+        raw_df = pd.read_csv(csv_file)
+        result = validate_and_geo_csv(raw_df)
+        
+        if result:
+            gdf, pm10_col = result
             
-            shp_data_blobs = [(f.name, f.getvalue()) for f in shp_files]
-            gdf = load_and_clean_gdf(shp_data_blobs)
+            # 1. Fill Gaps
+            gdf = ml_fill_gaps(gdf, pm10_col)
             
-            # Merge data
-            merged = gdf.merge(df, left_on="id", right_on="location_id", how="left")
-            
-            if merged["pm10"].isna().all():
-                st.error("❌ No matching IDs found between CSV and shapefile.")
-                st.info("Check that `location_id` (CSV) matches `id` (shapefile)")
-                st.stop()
-            
-            # ML gap filling
-            merged = ml_fill_gaps(merged)
-            
-            # Convert to grid
-            half_size = cell_size * 1000  # Convert km to meters
-            merged["grid_geometry"] = merged.geometry.apply(
+            # 2. Create Grid Geometry
+            half_size = (cell_size * 1000) / 2
+            gdf["grid_geometry"] = gdf.geometry.apply(
                 lambda p: box(p.x - half_size, p.y - half_size, p.x + half_size, p.y + half_size)
             )
-            merged = merged.set_geometry("grid_geometry")
+            gdf = gdf.set_geometry("grid_geometry")
             
-            # Stats
-            total_points = len(merged)
-            predicted = len(merged[merged['status'] == 'AI Predicted'])
-            avg_pm10 = merged["pm10"].mean()
+            # 3. Metrics
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Points", len(gdf))
+            col2.metric("Avg PM10", f"{gdf[pm10_col].mean():.1f}")
+            col3.metric("AI Predicted", len(gdf[gdf['status']=='AI Predicted']))
             
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Points", total_points)
-            col2.metric("AI Predictions", predicted, delta=f"{predicted/total_points:.1%}")
-            col3.metric("Avg PM10", f"{avg_pm10:.1f} µg/m³")
-            col4.metric("Data Coverage", f"{1-merged['pm10'].isna().mean():.1%}")
+            # 4. Visualization
+            c_left, c_right = st.columns([3, 1])
             
-            # Visualization
-            col_left, col_right = st.columns([3, 1])
-            
-            with col_left:
-                st.subheader("🗺️ PM10 Heatmap")
-                fig, ax = plt.subplots(figsize=(12, 10), dpi=100)
-                merged.plot(
-                    column="pm10", 
+            with c_left:
+                fig, ax = plt.subplots(figsize=(10, 8))
+                gdf.plot(
+                    column=pm10_col, 
                     cmap=color_scheme, 
                     alpha=map_alpha, 
                     ax=ax, 
                     legend=True,
-                    legend_kwds={'shrink': 0.8, 'label': "PM10 (µg/m³)"},
-                    missing_kwds={'color': 'lightgrey', 'alpha': 0.3, 'label': 'No Data'}
+                    legend_kwds={'label': "PM10 Concentration"}
                 )
-                cx.add_basemap(ax, source=cx.providers.Esri.WorldImagery, zoom=10, alpha=0.8)
+                cx.add_basemap(ax, source=cx.providers.CartoDB.Positron)
                 ax.set_axis_off()
-                ax.set_title("PM10 Distribution Map", fontsize=16, fontweight='bold', pad=20)
-                plt.tight_layout()
                 st.pyplot(fig)
-            
-            with col_right:
-                st.subheader("📊 Data Summary")
-                st.dataframe(
-                    merged[['id', 'location_id', 'pm10', 'status']].round(2),
-                    use_container_width=True,
-                    height=400
-                )
                 
-                st.subheader("PM10 Statistics")
-                st.json({
-                    "Min": f"{merged['pm10'].min():.1f}",
-                    "Max": f"{merged['pm10'].max():.1f}",
-                    "Mean": f"{merged['pm10'].mean():.1f}",
-                    "Std": f"{merged['pm10'].std():.1f}"
-                })
-            
-            # Download options
-            st.markdown("---")
-            csv_download = merged[['id', 'location_id', 'pm10', 'status']].round(2)
-            st.download_button(
-                "💾 Download Results CSV",
-                csv_download.to_csv(index=False),
-                f"pm10_results_{cell_size}km.csv",
-                "text/csv"
-            )
-            
-        except Exception as e:
-            st.error(f"⚠️ Processing error: {str(e)}")
-            st.info("💡 Common fixes: Check file formats, column names, or try smaller files")
-
+            with c_right:
+                st.write("### Preview")
+                st.dataframe(gdf[[pm10_col, 'status']].head(10), use_container_width=True)
+                
+                # Download
+                csv_out = gdf.drop(columns='grid_geometry').to_csv(index=False)
+                st.download_button("💾 Download Results", csv_out, "pm10_output.csv", "text/csv")
+                
+    except Exception as e:
+        st.error(f"Error: {e}")
 else:
-    st.info("👆 **Please upload both CSV and Shapefile data to get started**")
-    st.markdown("### Example Workflow:")
-    st.markdown("""
-    1. **CSV**: `location_id,pm10` (e.g., "001,25.3")
-    2. **Shapefile**: Monitoring station locations with matching `id`
-    3. **Result**: ML-enhanced heatmap + gap-filled data
-    """)
+    st.info("💡 Please upload a CSV with 'lat', 'lon', and 'pm10' columns.")
