@@ -6,3 +6,5 @@ matplotlib
 contextily
 shapely
 scikit-learn
+folium
+streamlit-folium
