@@ -21,7 +21,7 @@ st.markdown("""
     .main { background-color: #f5f7f9; }
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #ff4b4b; color: white; }
     </style>
-    """, unsafe_allow_stdio=True)
+    """, unsafe_allow_html=True)
 
 @st.cache_data(ttl=900)
 def get_live_pm10_data():
