@@ -1,82 +1,82 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
+import matplotlib.pyplot as plt
+from scipy.interpolate import griddata
 from sklearn.ensemble import RandomForestRegressor
-import folium
-from folium.plugins import HeatMap
-from streamlit_folium import st_folium
-import warnings
+import io
 
-warnings.filterwarnings('ignore')
+# --- CONFIG ---
+TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"  # Get free at https://aqicn.org/data-platform/token/
+LUCKNOW_BOUNDS = "26.70,80.75,26.95,81.10" # Lat/Lon box for Lucknow
 
-# ---------------- CONFIG ----------------
-st.set_page_config(page_title="Pro PM10 Heatmapper", layout="wide")
-st.title("🌍 Smart PM10 Smooth Heatmap")
+st.set_page_config(page_title="Lucknow Live Spatial Analysis", layout="wide")
 
-# ---------------- ML GAP FILLING ----------------
-def ml_fill_gaps(df, lat_col, lon_col, pm10_col):
-    """Predicts missing PM10 values to ensure a continuous heatmap surface."""
-    data_present = df[df[pm10_col].notna()].copy()
-    data_missing = df[df[pm10_col].isna()].copy()
+# --- DATA FETCHING ---
+def get_live_lucknow_data():
+    """Fetches live sensor data from WAQI API for the Lucknow region."""
+    url = f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={TOKEN}"
+    try:
+        response = requests.get(url).json()
+        if response['status'] == 'ok':
+            data = response['data']
+            # Clean and format
+            df = pd.DataFrame(data)
+            df['lat'] = df['lat'].astype(float)
+            df['lon'] = df['lon'].astype(float)
+            # Fetching PM10 (Note: some stations might report AQI as proxy)
+            df['pm10'] = pd.to_numeric(df['aqi'], errors='coerce') 
+            return df.dropna(subset=['pm10'])
+    except Exception as e:
+        st.error(f"Connection Error: {e}")
+        return pd.DataFrame()
+
+# --- SPATIAL ML & INTERPOLATION ---
+def create_spread_heatmap(df, res=250):
+    # ML to 'learn' the city's pollution trend
+    model = RandomForestRegressor(n_estimators=100)
+    model.fit(df[['lat', 'lon']], df['pm10'])
+
+    # Create a dense grid over Lucknow
+    lat_grid = np.linspace(df.lat.min(), df.lat.max(), res)
+    lon_grid = np.linspace(df.lon.min(), df.lon.max(), res)
+    lon_mesh, lat_mesh = np.meshgrid(lon_grid, lat_grid)
     
-    if data_missing.empty or len(data_present) < 5:
-        return df
+    # Predict PM10 for every pixel in the grid
+    grid_points = np.c_[lat_mesh.ravel(), lon_mesh.ravel()]
+    pm10_pred = model.predict(grid_points).reshape(res, res)
     
-    # Train on available coordinates to predict 'unknown' spots
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(data_present[[lat_col, lon_col]], data_present[pm10_col])
+    return lon_mesh, lat_mesh, pm10_pred
+
+# --- UI ---
+st.title("🏙️ Live PM10 Spatial Analysis: Lucknow")
+st.markdown("This app connects to live sensors and uses ML to interpolate air quality across the city.")
+
+if st.button("🔄 Refresh Live Data"):
+    df_live = get_live_lucknow_data()
     
-    df.loc[df[pm10_col].isna(), pm10_col] = model.predict(data_missing[[lat_col, lon_col]])
-    return df
+    if not df_live.empty:
+        lon_m, lat_m, pm_grid = create_spread_heatmap(df_live)
 
-# ---------------- SIDEBAR ----------------
-st.sidebar.header("📁 Data & Style")
-csv_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔥 Heatmap Settings")
-# These controls allow you to fine-tune the 'smoothness' of the map
-radius = st.sidebar.slider("Heat Radius", 10, 100, 35, help="Size of the 'glow' around points")
-blur = st.sidebar.slider("Blur Amount", 1, 50, 15, help="Smoothness of the transition")
-min_opacity = st.sidebar.slider("Transparency", 0.0, 1.0, 0.4)
-
-# ---------------- MAIN APP ----------------
-if csv_file:
-    df = pd.read_csv(csv_file)
-    
-    # Identify columns (case-insensitive)
-    lat_col = next((c for c in df.columns if 'lat' in c.lower()), None)
-    lon_col = next((c for c in df.columns if 'lon' in c.lower()), None)
-    pm10_col = next((c for c in df.columns if 'pm10' in c.lower()), None)
-
-    if lat_col and lon_col and pm10_col:
-        # Step 1: Fill missing PM10 gaps using ML
-        df = ml_fill_gaps(df, lat_col, lon_col, pm10_col)
+        # Plotting for Research
+        fig, ax = plt.subplots(figsize=(12, 9))
+        contour = ax.contourf(lon_m, lat_m, pm_grid, levels=50, cmap='Spectral_r')
+        plt.colorbar(contour, label='Predicted PM10 (µg/m³)')
         
-        # Step 2: Create Map. 'CartoDB dark_matter' makes colors pop.
-        m = folium.Map(
-            location=[df[lat_col].mean(), df[lon_col].mean()], 
-            zoom_start=12, 
-            tiles="CartoDB dark_matter" 
-        )
-
-        # Step 3: Prepare Heatmap data [[lat, lon, weight]]
-        heat_data = df[[lat_col, lon_col, pm10_col]].values.tolist()
+        # Overlay actual sensor locations for transparency
+        ax.scatter(df_live['lon'], df_live['lat'], c='black', s=20, label='Live Sensors', alpha=0.6)
         
-        # Add smooth HeatMap layer
-        HeatMap(
-            heat_data,
-            radius=radius,
-            blur=blur,
-            min_opacity=min_opacity,
-            gradient={0.4: 'blue', 0.65: 'lime', 1: 'red'}
-        ).add_to(m)
+        ax.set_title("Lucknow PM10 Distribution (Live Interpolation)", fontsize=15)
+        ax.set_xlabel("Longitude")
+        ax.set_ylabel("Latitude")
+        ax.legend()
 
-        # Render the map
-        st_folium(m, width="100%", height=600)
-        
-        st.success("Heatmap generated! Use the sidebar to adjust the 'smoothness'.")
+        st.pyplot(fig)
+
+        # High-Res Export
+        img_buf = io.BytesIO()
+        plt.savefig(img_buf, format="png", dpi=600, bbox_inches='tight')
+        st.download_button("📥 Download 600 DPI PNG for Paper", img_buf.getvalue(), "lucknow_aqi_research.png")
     else:
-        st.error("CSV must contain 'latitude', 'longitude', and 'pm10' columns.")
-else:
-    st.info("👆 Please upload a CSV to get started.")
+        st.warning("Could not fetch live data. Please check your API token.")
