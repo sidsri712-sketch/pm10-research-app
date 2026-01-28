@@ -1,10 +1,8 @@
-streamlit
 pandas
-geopandas
 numpy
 matplotlib
 contextily
-shapely
 scikit-learn
-folium
+requests
+scipy
 streamlit-folium
