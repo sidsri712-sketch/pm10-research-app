@@ -31,7 +31,7 @@ def fetch_pm10():
                     "lat": s["lat"],
                     "lon": s["lon"],
                     "pm10": dr["data"]["iaqi"]["pm10"]["v"],
-                    "name": dr["data"]["city"]["name"]  # FIXED HERE
+                    "name": dr["data"]["city"]["name"]
                 })
             time.sleep(0.2)
 
@@ -99,15 +99,23 @@ if st.button("🚀 Run ML + Validation"):
 
     with col1:
         fig, ax = plt.subplots(figsize=(10, 8))
+
+        # FIX: draw basemap FIRST
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        cx.add_basemap(ax, source=cx.providers.CartoDB.Positron, zoom=12)
+
+        # draw heatmap ON TOP
         im = ax.imshow(
             z,
             extent=[xmin, xmax, ymin, ymax],
             origin="lower",
             cmap="YlOrRd",
-            alpha=opacity
+            alpha=opacity,
+            zorder=3
         )
-        ax.scatter(xs, ys, c="black", s=40, edgecolors="white", zorder=3)
-        cx.add_basemap(ax, source=cx.providers.CartoDB.Positron, zoom=12)
+
+        ax.scatter(xs, ys, c="black", s=40, edgecolors="white", zorder=4)
         fig.colorbar(im, label="Predicted PM10 (µg/m³)")
         ax.set_axis_off()
         st.pyplot(fig)
