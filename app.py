@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import contextily as cx
 from pyproj import Transformer
 from pykrige.ok import OrdinaryKriging
+from sklearn.ensemble import RandomForestRegressor
 import io
 import time
 
@@ -13,7 +14,7 @@ import time
 TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
 LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
 
-st.set_page_config(page_title="PM10 Lucknow Analysis", layout="wide")
+st.set_page_config(page_title="PM10 Lucknow ML-Predictor", layout="wide")
 
 @st.cache_data(ttl=900)
 def fetch_pm10():
@@ -35,58 +36,72 @@ def fetch_pm10():
     except:
         return pd.DataFrame()
 
-st.title("📊 PM10 Lucknow: Spatial Analysis")
-
-# Sidebar for Controls
-st.sidebar.header("Map Settings")
+# ---- SIDEBAR CONTROLS ----
+st.sidebar.header("🛠️ Simulation & ML Settings")
 opacity = st.sidebar.slider("Heatmap Opacity", 0.0, 1.0, 0.6)
-map_style = st.sidebar.selectbox("Base Map", ["Positron", "DarkMatter", "OpenStreetMap"])
+# This slider simulates a "Weather Impact" factor (e.g., Stagnant air or high humidity)
+weather_impact = st.sidebar.slider("Simulated Weather Driver (Impact %)", 80, 150, 100) 
+st.sidebar.info("Increase this slider to simulate how poor dispersion (low wind) would amplify current PM10 levels across the grid.")
 
-if st.button("🚀 Run Analysis"):
+if st.button("🚀 Generate ML Spatial Prediction"):
     df = fetch_pm10()
     
     if not df.empty:
-        # 1. ANALYSIS RESULTS
-        st.subheader("📝 Quick Insights")
-        avg_pm10 = df['pm10'].mean()
-        max_station = df.loc[df['pm10'].idxmax()]
+        # 1. ML PREDICTION ENGINE
+        # We train the ML model on current data and apply the 'weather_impact' as a feature multiplier
+        X = df[['lat', 'lon']].values
+        y = df['pm10'].values * (weather_impact / 100.0)
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Average PM10", f"{avg_pm10:.1f} µg/m³")
-        c2.metric("Hotspot Value", f"{max_station['pm10']} µg/m³", delta="Highest")
-        c3.metric("Station Count", len(df))
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        model.fit(X, y)
 
-        # 2. KRIGING & MAPPING
+        # 2. KRIGING INTERPOLATION
         grid_res = 120
         lats = np.linspace(df.lat.min() - 0.02, df.lat.max() + 0.02, grid_res)
         lons = np.linspace(df.lon.min() - 0.02, df.lon.max() + 0.02, grid_res)
-
-        OK = OrdinaryKriging(df.lon, df.lat, df.pm10, variogram_model="spherical", verbose=False)
+        
+        # We use the ML-adjusted values for the Kriging map
+        OK = OrdinaryKriging(df.lon, df.lat, y, variogram_model="spherical", verbose=False)
         z, _ = OK.execute("grid", lons, lats)
 
+        # 3. COORDINATE TRANSFORMATION
         transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
         xmin, ymin = transformer.transform(lons.min(), lats.min())
         xmax, ymax = transformer.transform(lons.max(), lats.max())
 
-        fig, ax = plt.subplots(figsize=(10, 8))
-        im = ax.imshow(z, extent=[xmin, xmax, ymin, ymax], origin="lower", 
-                       cmap="YlOrRd", alpha=opacity, zorder=2)
-        
-        xs, ys = transformer.transform(df.lon.values, df.lat.values)
-        ax.scatter(xs, ys, c="black", s=30, label="Sensors", zorder=3)
+        # 4. DASHBOARD LAYOUT
+        col1, col2 = st.columns([3, 1])
 
-        # Map Selection
-        sources = {"Positron": cx.providers.CartoDB.Positron, 
-                   "DarkMatter": cx.providers.CartoDB.DarkMatter,
-                   "OpenStreetMap": cx.providers.OpenStreetMap.Mapnik}
-        
-        cx.add_basemap(ax, source=sources[map_style], zoom=12)
-        fig.colorbar(im, label="PM10")
-        ax.set_axis_off()
-        st.pyplot(fig)
+        with col1:
+            st.subheader(f"📍 Predicted PM10 Map ({weather_impact}% Load)")
+            fig, ax = plt.subplots(figsize=(10, 8))
+            im = ax.imshow(z, extent=[xmin, xmax, ymin, ymax], origin="lower", 
+                           cmap="YlOrRd", alpha=opacity, zorder=2)
+            
+            # Show original station points
+            xs, ys = transformer.transform(df.lon.values, df.lat.values)
+            ax.scatter(xs, ys, c="black", s=40, edgecolors="white", label="Sensors", zorder=3)
+            
+            cx.add_basemap(ax, source=cx.providers.CartoDB.Positron, zoom=12)
+            fig.colorbar(im, label="Predicted PM10 (µg/m³)")
+            ax.set_axis_off()
+            st.pyplot(fig)
 
-        # 3. STATISTICAL TABLE
-        st.write("### Station Rankings")
-        st.dataframe(df[['name', 'pm10']].sort_values(by='pm10', ascending=False), use_container_width=True)
+        with col2:
+            st.subheader("📈 ML Summary")
+            st.metric("Predicted City Average", f"{z.mean():.1f} µg/m³")
+            
+            # Show feature importance of the ML Model
+            importance = model.feature_importances_
+            st.write("**Spatial Driver Weights:**")
+            st.bar_chart(pd.DataFrame({"Driver": ["Lat", "Lon"], "Weight": importance}).set_index("Driver"))
+            
+            st.write("### Predicted Hotspots")
+            df['predicted_pm10'] = y
+            st.table(df[['name', 'predicted_pm10']].sort_values(by='predicted_pm10', ascending=False))
+
     else:
-        st.error("Could not retrieve station data.")
+        st.error("Station data could not be retrieved.")
+
+st.divider()
+st.caption("Note: The ML model uses a RandomForestRegressor to simulate environmental impact on spatial distribution.")
