@@ -5,3 +5,4 @@ numpy
 matplotlib
 contextily
 shapely
+scikit-learn
