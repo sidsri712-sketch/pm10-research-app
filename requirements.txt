@@ -15,3 +15,7 @@ scikit-learn
 scipy
 pyproj
 pykrige
+meteostate
+datetime
+io
+time
