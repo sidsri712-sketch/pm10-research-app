@@ -9,12 +9,10 @@ from scipy.ndimage import gaussian_filter
 import io
 
 # --- CONFIG ---
-TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78" 
-# Expanded bounds to ensure enough data points for a "spread" effect
-LUCKNOW_BOUNDS = "26.65,80.70,27.00,81.15" 
+TOKEN = "YOUR_WAQI_API_TOKEN" 
+LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05" 
 
 st.set_page_config(page_title="Lucknow PM10 Analysis", layout="wide")
-st.title("🏙️ Lucknow Live PM10 Research Mapper")
 
 def get_live_data():
     url = f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={TOKEN}"
@@ -23,61 +21,52 @@ def get_live_data():
         if r['status'] == 'ok':
             df = pd.DataFrame(r['data'])
             df[['lat', 'lon']] = df[['lat', 'lon']].astype(float)
-            # Use 'aqi' as the proxy for PM10 concentration
             df['pm10'] = pd.to_numeric(df['aqi'], errors='coerce')
             return df.dropna(subset=['pm10'])
     except:
         return pd.DataFrame()
 
-if st.button("Generate High-Res Research Map"):
+st.title("🏙️ Lucknow PM10 Research Mapper")
+
+if st.button("Generate High-Res Heatmap"):
     df = get_live_data()
     
-    if not df.empty and len(df) > 2:
-        with st.spinner("Calculating spatial gradients..."):
-            # 1. ML Interpolation
-            res = 300 
-            lat_range = np.linspace(df.lat.min(), df.lat.max(), res)
-            lon_range = np.linspace(df.lon.min(), df.lon.max(), res)
-            lon_mesh, lat_mesh = np.meshgrid(lon_range, lat_range)
+    if not df.empty:
+        with st.spinner("Smoothing spatial gradients..."):
+            # 1. Grid & ML Interpolation
+            res = 200
+            lat_idx = np.linspace(df.lat.min(), df.lat.max(), res)
+            lon_idx = np.linspace(df.lon.min(), df.lon.max(), res)
+            lon_grid, lat_grid = np.meshgrid(lon_idx, lat_idx)
             
-            model = RandomForestRegressor(n_estimators=100, random_state=42)
+            model = RandomForestRegressor(n_estimators=50, random_state=42)
             model.fit(df[['lat', 'lon']], df['pm10'])
-            grid_points = np.c_[lat_mesh.ravel(), lon_mesh.ravel()]
-            pm_grid = model.predict(grid_points).reshape(res, res)
+            pm_pred = model.predict(np.c_[lat_grid.ravel(), lon_grid.ravel()]).reshape(res, res)
             
-            # 2. Smooth the heatmap
-            pm_grid_smooth = gaussian_filter(pm_grid, sigma=7)
+            # 2. Smooth the data for that "Heatmap" look
+            pm_smooth = gaussian_filter(pm_pred, sigma=4)
 
             # 3. Plotting
-            fig, ax = plt.subplots(figsize=(15, 15))
+            fig, ax = plt.subplots(figsize=(10, 10))
+            extent = [df.lon.min(), df.lon.max(), df.lat.min(), df.lat.max()]
             
-            extent = [lon_range.min(), lon_range.max(), lat_range.min(), lat_range.max()]
-            
-            # Create the heat layer
-            im = ax.imshow(pm_grid_smooth, extent=extent, origin='lower', 
+            # Heat layer
+            im = ax.imshow(pm_smooth, extent=extent, origin='lower', 
                            cmap='RdYlGn_r', alpha=0.5, interpolation='bilinear')
             
-            # Add Basemap (Positron is best for research papers as it is clean)
-            try:
-                cx.add_basemap(ax, crs="EPSG:4326", source=cx.providers.CartoDB.Positron)
-            except Exception as e:
-                st.warning("Basemap could not load, showing data only.")
+            # Basemap with automatic CRS detection
+            cx.add_basemap(ax, crs="EPSG:4326", source=cx.providers.CartoDB.Positron)
             
-            # Add station locations
-            ax.scatter(df.lon, df.lat, c='black', s=50, edgecolors='white', linewidth=1, label='Live Sensors')
+            # Sensor points
+            ax.scatter(df.lon, df.lat, c='black', s=25, edgecolors='white', label='Sensors')
             
-            plt.colorbar(im, label='PM10 Concentration (µg/m³)', shrink=0.5, pad=0.02)
-            ax.set_title(f"Lucknow Spatial Analysis: PM10 Distribution\n(Real-time Data via WAQI API)", fontsize=18, pad=20)
-            ax.axis('off')
-
+            plt.colorbar(im, label='PM10 (µg/m³)', shrink=0.5)
+            ax.set_axis_off()
             st.pyplot(fig)
 
             # 4. High-Res Export
             buf = io.BytesIO()
             plt.savefig(buf, format="png", dpi=600, bbox_inches='tight')
-            st.download_button("💾 Download 600 DPI PNG for Research Paper", 
-                               buf.getvalue(), "lucknow_pm10_report.png", "image/png")
+            st.download_button("💾 Download 600 DPI PNG", buf.getvalue(), "lucknow_pm10.png")
     else:
-        st.error("Not enough live data points found in Lucknow right now. Try expanding the bounds in the code.")
-
-st.info("💡 Tip: Ensure your GitHub has both requirements.txt and packages.txt to prevent installation errors.")
+        st.error("Live data fetch failed. Check API Token.")
