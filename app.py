@@ -203,10 +203,20 @@ if run_hybrid or run_diag or predict_custom:
     if os.path.exists(DB_FILE):
         df_train = pd.read_csv(DB_FILE)
     else:
-        df_train = df_live
+        df_train = df_live.copy()
+
+    # ---------- ADD TIME FEATURES ----------
+    df_train['timestamp'] = pd.to_datetime(df_train['timestamp'])
+
+    df_train['hour'] = df_train['timestamp'].dt.hour
+    df_train['dayofweek'] = df_train['timestamp'].dt.dayofweek
+    df_train['month'] = df_train['timestamp'].dt.month
 
     rf_final = RandomForestRegressor(n_estimators=1000, max_depth=5, random_state=42)
-    rf_final.fit(df_train[['lat', 'lon']], df_train['pm10'])
+    rf_final.fit(
+    df_train[['lat', 'lon', 'hour', 'dayofweek', 'month']],
+    df_train['pm10']
+    )
 
     df_live['residuals'] = (df_live['pm10'] - rf_final.predict(df_live[['lat', 'lon']])) * weather_mult
 
@@ -235,7 +245,21 @@ if run_hybrid or run_diag or predict_custom:
 
 
     lon_g, lat_g = np.meshgrid(lons, lats)
-    rf_trend = rf_final.predict(np.column_stack([lat_g.ravel(), lon_g.ravel()])).reshape(grid_res, grid_res)
+    now = pd.Timestamp.now()
+
+    hour_now = now.hour
+    dow_now = now.dayofweek
+    month_now = now.month
+
+    rf_trend = rf_final.predict(
+        np.column_stack([
+            lat_g.ravel(),
+            lon_g.ravel(),
+            np.full(lat_g.size, hour_now),
+            np.full(lat_g.size, dow_now),
+            np.full(lat_g.size, month_now)
+        ])
+    ).reshape(grid_res, grid_res)
 
     z_final = (rf_trend * weather_mult) + z_res.T
     z_final[z_final < 0] = 0
@@ -248,7 +272,15 @@ if run_hybrid or run_diag or predict_custom:
         st.session_state.custom_pm10_lat = custom_lat
         st.session_state.custom_pm10_lon = custom_lon
 
-        custom_rf_pred = rf_final.predict([[custom_lat, custom_lon]])[0]
+        now = pd.Timestamp.now()
+
+        custom_rf_pred = rf_final.predict([[
+            custom_lat,
+            custom_lon,
+            now.hour,
+            now.dayofweek,
+            now.month
+        ]])[0]
 
         try:
             custom_res_pred, _ = OK.execute("points", [custom_lon], [custom_lat])
