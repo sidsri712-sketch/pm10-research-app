@@ -240,27 +240,39 @@ if run_hybrid or run_diag or predict_custom:
     z_final = gaussian_filter(rf_trend * weather_mult + z_res.T, sigma=1.5)
     z_final[z_final < 0] = 0
 
-    # MAP
+    # --- MAP ---
     transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+
     xmin, ymin = transformer.transform(lons.min(), lats.min())
     xmax, ymax = transformer.transform(lons.max(), lats.max())
 
     fig, ax = plt.subplots(figsize=(12, 9))
+
+    # 🔑 THIS IS THE FIX
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+
+    # Basemap AFTER limits
     cx.add_basemap(ax, source=cx.providers.CartoDB.DarkMatter, zoom=12)
+
     im = ax.imshow(
         z_final,
         extent=[xmin, xmax, ymin, ymax],
         origin="lower",
         cmap="magma",
         alpha=opacity,
-        interpolation="hamming"
+        interpolation="hamming",
+        zorder=2
     )
 
+    # Stations
     xs, ys = transformer.transform(df_live.lon.values, df_live.lat.values)
-    ax.scatter(xs, ys, c="white", edgecolors="black", s=70, label="Stations")
-    plt.colorbar(im, label="PM10 (µg/m³)")
+    ax.scatter(xs, ys, c="white", edgecolors="black", s=70, zorder=3, label="Stations")
+
+    plt.colorbar(im, ax=ax, label="PM10 (µg/m³)")
     ax.legend()
     ax.set_axis_off()
+
     st.pyplot(fig)
 
     # CUSTOM POINT
