@@ -46,16 +46,23 @@ def validate_hybrid_model(df):
     for i in range(len(df)):
         train = df.drop(i)
         test = df.iloc[i]
-        rf = RandomForestRegressor(n_estimators=100, random_state=42)
+        
+        # Optimization: Restricted depth and leaf samples to prevent overfitting in LOOCV
+        rf = RandomForestRegressor(n_estimators=150, max_depth=6, min_samples_leaf=2, random_state=42)
         rf.fit(train[['lat', 'lon']], train['pm10'])
+        
         train_res = train['pm10'] - rf.predict(train[['lat', 'lon']])
         try:
-            ok = OrdinaryKriging(train.lon.values, train.lat.values, train_res.values, variogram_model="spherical")
+            # Optimization: Switched to 'gaussian' variogram for smoother spatial error correction
+            ok = OrdinaryKriging(train.lon.values, train.lat.values, train_res.values, variogram_model="gaussian")
             res_pred, _ = ok.execute("points", [test.lon], [test.lat])
             final_pred = rf.predict([[test.lat, test.lon]])[0] + res_pred[0]
             errors.append(abs(final_pred - test.pm10))
         except:
-            continue
+            # Fallback to RF-only if Kriging matrix is singular for a specific fold
+            final_pred = rf.predict([[test.lat, test.lon]])[0]
+            errors.append(abs(final_pred - test.pm10))
+            
         progress_bar.progress((i + 1) / len(df))
     progress_bar.empty()
     return np.mean(errors) if errors else np.nan
@@ -77,7 +84,8 @@ if st.sidebar.button("🚀 Run Hybrid Analysis"):
             mae = validate_hybrid_model(df)
         
         # MODEL LOGIC
-        rf = RandomForestRegressor(n_estimators=200, random_state=42)
+        # Applying same optimized parameters to the final visualization model
+        rf = RandomForestRegressor(n_estimators=200, max_depth=6, min_samples_leaf=2, random_state=42)
         rf.fit(df[['lat', 'lon']], df['pm10'])
         df['rf_trend'] = rf.predict(df[['lat', 'lon']])
         df['residuals'] = (df['pm10'] - df['rf_trend']) * weather_load
@@ -86,7 +94,8 @@ if st.sidebar.button("🚀 Run Hybrid Analysis"):
         lats = np.linspace(df.lat.min() - 0.02, df.lat.max() + 0.02, grid_res)
         lons = np.linspace(df.lon.min() - 0.02, df.lon.max() + 0.02, grid_res)
         
-        OK = OrdinaryKriging(df.lon, df.lat, df['residuals'], variogram_model="spherical")
+        # Using Gaussian for the final grid generation
+        OK = OrdinaryKriging(df.lon, df.lat, df['residuals'], variogram_model="gaussian")
         z_res, _ = OK.execute("grid", lons, lats)
 
         lon_grid, lat_grid = np.meshgrid(lons, lats)
