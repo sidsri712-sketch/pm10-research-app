@@ -15,7 +15,7 @@ import os
 from streamlit_autorefresh import st_autorefresh
 import datetime 
 import matplotlib.patches as mpatches 
-from scipy.ndimage import gaussian_filter # Added for smoothing artifacts
+from scipy.ndimage import gaussian_filter # Essential for smoothing
 
 # --------------------------------------------------
 # CONFIGURATION
@@ -210,7 +210,7 @@ if run_hybrid or run_diag or predict_custom:
 
     df_live['residuals'] = (df_live['pm10'] - rf_final.predict(df_live[['lat', 'lon']])) * weather_mult
 
-    grid_res = 200
+    grid_res = 250 # Increased grid resolution for smoother interpolation
     lats = np.linspace(df_live.lat.min()-0.06, df_live.lat.max()+0.06, grid_res)
     lons = np.linspace(df_live.lon.min()-0.06, df_live.lon.max()+0.06, grid_res)
 
@@ -240,24 +240,22 @@ if run_hybrid or run_diag or predict_custom:
     z_final = (rf_trend * weather_mult) + z_res.T
     z_final[z_final < 0] = 0
     
-    # SMOOTHING STEP: This removes the "cross lines" caused by the grid interpolation
-    z_final = gaussian_filter(z_final, sigma=0.6)
+    # ADVANCED SMOOTHING: High sigma Gaussian filter to blend the "cross lines"
+    z_final = gaussian_filter(z_final, sigma=1.5)
 
     # ---------- CUSTOM PREDICTION ----------
     if predict_custom:
         st.session_state.custom_pm10_lat = custom_lat
         st.session_state.custom_pm10_lon = custom_lon
 
-        # Predict RF trend for custom location
         custom_rf_pred = rf_final.predict([[custom_lat, custom_lon]])[0]
 
-        # Predict Kriging residual for custom location
         try:
             custom_res_pred, _ = OK.execute("points", [custom_lon], [custom_lat])
             custom_krig_pred = custom_res_pred[0]
         except Exception as e:
             st.warning(f"Kriging for custom location failed: {e}. Using RF trend only for custom prediction.")
-            custom_krig_pred = 0.0 # Fallback to 0 residual
+            custom_krig_pred = 0.0
 
         st.session_state.custom_pm10_prediction = custom_rf_pred + custom_krig_pred
 
@@ -277,21 +275,20 @@ if run_hybrid or run_diag or predict_custom:
     ax.set_ylim(ymin, ymax)
     cx.add_basemap(ax, source=cx.providers.CartoDB.DarkMatter, zoom=12)
 
-    # Updated imshow with bilinear interpolation to remove grid lines
+    # Use 'hamming' interpolation for the best balance of smoothness and lack of grid artifacts
     im = ax.imshow(
         z_final,
         extent=[xmin, xmax, ymin, ymax],
         origin="lower",
         cmap="magma",
         alpha=opacity,
-        interpolation="bilinear",
+        interpolation="hamming",
         resample=True
     )
 
     ax.scatter(xs, ys, c="white", edgecolors="black", s=70, zorder=3, label="Stations")
     plt.colorbar(im, label="PM10 (µg/m³)")
 
-    # Add custom location marker if available
     if st.session_state.custom_pm10_prediction is not None:
         custom_x, custom_y = transformer.transform(st.session_state.custom_pm10_lon, st.session_state.custom_pm10_lat)
         ax.scatter(custom_x, custom_y, c="red", marker="X", s=200, zorder=4, label="Custom Location")
