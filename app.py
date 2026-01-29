@@ -61,7 +61,7 @@ def fetch_pm10_data():
         return pd.DataFrame()
 
 # --------------------------------------------------
-# LOOCV + DIAGNOSTICS (FROM SECOND SCRIPT)
+# LOOCV + DIAGNOSTICS (UNCHANGED)
 # --------------------------------------------------
 def run_diagnostics(df):
     results = []
@@ -80,7 +80,7 @@ def run_diagnostics(df):
         try:
             ok = OrdinaryKriging(
                 train.lon, train.lat, residuals,
-                variogram_model="gaussian",
+                variogram_model="spherical",
                 verbose=False
             )
             p_res, _ = ok.execute("points", [test.lon], [test.lat])
@@ -161,13 +161,13 @@ if run_hybrid or run_diag:
         df['pm10'] - rf_final.predict(df[['lat', 'lon']])
     ) * weather_mult
 
-    grid_res = 100
+    grid_res = 250 
     lats = np.linspace(df.lat.min()-0.03, df.lat.max()+0.03, grid_res)
     lons = np.linspace(df.lon.min()-0.03, df.lon.max()+0.03, grid_res)
 
     OK = OrdinaryKriging(
         df.lon, df.lat, df['residuals'],
-        variogram_model="gaussian"
+        variogram_model="spherical" 
     )
     z_res, _ = OK.execute("grid", lons, lats)
 
@@ -202,7 +202,7 @@ if run_hybrid or run_diag:
         origin="lower",
         cmap="magma",
         alpha=opacity,
-        interpolation="bicubic"
+        interpolation="bilinear" 
     )
 
     ax.scatter(
@@ -217,6 +217,18 @@ if run_hybrid or run_diag:
     plt.colorbar(im, label="PM10 (µg/m³)")
     ax.set_axis_off()
     st.pyplot(fig)
+
+    # --- ADDED: PM10 SAFETY LEGEND ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🌡 PM10 Health Scale")
+    st.sidebar.info("""
+    - **0-50**: Good
+    - **51-100**: Satisfactory
+    - **101-250**: Moderate
+    - **251-350**: Poor
+    - **351-430**: Very Poor
+    - **430+**: Severe
+    """)
 
     buf = io.BytesIO()
     fig.savefig(buf, dpi=300, format="png")
