@@ -72,7 +72,7 @@ def run_diagnostics(df):
         rf.fit(train[['lat', 'lon']], train['pm10'])
         residuals = train['pm10'] - rf.predict(train[['lat', 'lon']])
         try:
-            ok = OrdinaryKriging(train.lon, train.lat, residuals, variogram_model="linear", verbose=False)
+            ok = OrdinaryKriging(train.lon, train.lat, residuals, variogram_model="gaussian", verbose=False)
             p_res, _ = ok.execute("points", [test.lon], [test.lat])
             pred = rf.predict([[test.lat, test.lon]])[0] + p_res[0]
         except:
@@ -128,29 +128,29 @@ if run_hybrid or run_diag:
     # ---------- FINAL HYBRID SURFACE ----------
     st.subheader("🗺 High-Resolution PM10 Surface")
 
-    # Lower max_depth helps reduce the sharp "blocky" splits from the RF
-    rf_final = RandomForestRegressor(n_estimators=500, max_depth=2, random_state=42)
+    # FIX 1: Max depth 1 removes the sharp "cross" splits from the Random Forest
+    rf_final = RandomForestRegressor(n_estimators=1000, max_depth=1, random_state=42)
     rf_final.fit(df[['lat', 'lon']], df['pm10'])
 
     df['residuals'] = (df['pm10'] - rf_final.predict(df[['lat', 'lon']])) * weather_mult
 
-    grid_res = 150 
-    lats = np.linspace(df.lat.min()-0.05, df.lat.max()+0.05, grid_res)
-    lons = np.linspace(df.lon.min()-0.05, df.lon.max()+0.05, grid_res)
+    grid_res = 200 
+    lats = np.linspace(df.lat.min()-0.06, df.lat.max()+0.06, grid_res)
+    lons = np.linspace(df.lon.min()-0.06, df.lon.max()+0.06, grid_res)
 
-    # FIXED: Variogram model set to 'linear' with a much larger range (0.15) 
-    # This specifically targets and "smudges" the cross lines you see in the images.
+    # FIX 2 & 3: Using a wider range and nugget to "smudge" the influence areas into smooth circles
+    v_range = 0.2 * (2 - weather_mult) 
+    
     OK = OrdinaryKriging(
         df.lon, df.lat, df['residuals'],
-        variogram_model="linear",
-        variogram_parameters={'slope': np.var(df['residuals'])/0.15, 'nugget': 0.1}
+        variogram_model="gaussian",
+        variogram_parameters={'sill': np.var(df['residuals']), 'range': v_range, 'nugget': 0.5}
     )
     z_res, _ = OK.execute("grid", lons, lats)
 
     lon_g, lat_g = np.meshgrid(lons, lats)
     rf_trend = rf_final.predict(np.column_stack([lat_g.ravel(), lon_g.ravel()])).reshape(grid_res, grid_res)
 
-    # Combining Trend + Residuals
     z_final = (rf_trend * weather_mult) + z_res.T
 
     # ---------- MAP ----------
@@ -170,7 +170,7 @@ if run_hybrid or run_diag:
         origin="lower",
         cmap="magma",
         alpha=opacity,
-        interpolation="bilinear" # Bilinear blending for a smooth look
+        interpolation="bicubic" 
     )
 
     ax.scatter(xs, ys, c="white", edgecolors="black", s=70, zorder=3, label="Stations")
