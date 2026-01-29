@@ -218,7 +218,17 @@ if run_hybrid or run_diag or predict_custom:
     df_train['pm10']
     )
 
-    df_live['residuals'] = (df_live['pm10'] - rf_final.predict(df_live[['lat', 'lon']])) * weather_mult
+    # ---------- ADD CURRENT TIME FEATURES FOR LIVE DATA ----------
+    now = pd.Timestamp.now()
+
+    df_live['hour'] = now.hour
+    df_live['dayofweek'] = now.dayofweek
+    df_live['month'] = now.month
+
+    df_live['residuals'] = (
+        df_live['pm10']
+        - rf_final.predict(df_live[['lat', 'lon', 'hour', 'dayofweek', 'month']])
+    ) * weather_mult
 
     grid_res = 250 # Increased grid resolution for smoother interpolation
     lats = np.linspace(df_live.lat.min()-0.06, df_live.lat.max()+0.06, grid_res)
