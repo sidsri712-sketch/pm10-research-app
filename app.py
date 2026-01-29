@@ -10,7 +10,6 @@ from pykrige.ok import OrdinaryKriging
 from sklearn.ensemble import RandomForestRegressor
 import time
 import io
-# NEW: Import for auto-refresh
 from streamlit_autorefresh import st_autorefresh
 
 # --------------------------------------------------
@@ -25,8 +24,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# NEW: Run every 30 minutes (1800000 milliseconds)
-# This will update the map automatically with live API data
+# Auto-refresh every 30 minutes
 count = st_autorefresh(interval=1800000, key="fizzbuzz")
 
 # --------------------------------------------------
@@ -36,7 +34,6 @@ count = st_autorefresh(interval=1800000, key="fizzbuzz")
 def fetch_pm10_data():
     url = f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={TOKEN}"
     stations = []
-
     try:
         r = requests.get(url).json()
         if r.get("status") == "ok":
@@ -44,7 +41,6 @@ def fetch_pm10_data():
                 dr = requests.get(
                     f"https://api.waqi.info/feed/@{s['uid']}/?token={TOKEN}"
                 ).json()
-
                 if dr.get("status") == "ok" and "pm10" in dr["data"].get("iaqi", {}):
                     stations.append({
                         "lat": s["lat"],
@@ -53,7 +49,6 @@ def fetch_pm10_data():
                         "name": dr["data"]["city"]["name"]
                     })
                 time.sleep(0.1)
-
         df = pd.DataFrame(stations)
         if not df.empty:
             df = df.groupby(['lat', 'lon']).agg({
@@ -61,7 +56,6 @@ def fetch_pm10_data():
                 'name': 'first'
             }).reset_index()
         return df
-
     except Exception as e:
         st.error(f"API Error: {e}")
         return pd.DataFrame()
@@ -71,31 +65,19 @@ def fetch_pm10_data():
 # --------------------------------------------------
 def run_diagnostics(df):
     results = []
-
     for i in range(len(df)):
         train = df.drop(i)
         test = df.iloc[i]
-
-        rf = RandomForestRegressor(
-            n_estimators=100, max_depth=5, random_state=42
-        )
+        rf = RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42)
         rf.fit(train[['lat', 'lon']], train['pm10'])
-
         residuals = train['pm10'] - rf.predict(train[['lat', 'lon']])
-
         try:
-            ok = OrdinaryKriging(
-                train.lon, train.lat, residuals,
-                variogram_model="gaussian",
-                verbose=False
-            )
+            ok = OrdinaryKriging(train.lon, train.lat, residuals, variogram_model="linear", verbose=False)
             p_res, _ = ok.execute("points", [test.lon], [test.lat])
             pred = rf.predict([[test.lat, test.lon]])[0] + p_res[0]
         except:
             pred = rf.predict([[test.lat, test.lon]])[0]
-
         results.append({"Actual": test.pm10, "Predicted": pred})
-
     res_df = pd.DataFrame(results)
     mae = np.mean(np.abs(res_df['Actual'] - res_df['Predicted']))
     return res_df, mae
@@ -104,8 +86,6 @@ def run_diagnostics(df):
 # MAIN UI
 # --------------------------------------------------
 st.title("📍 Lucknow PM10 Hybrid Spatial Analysis")
-
-# Visual indicator of refresh status
 st.sidebar.caption(f"Last data refresh: {time.strftime('%H:%M:%S')}")
 
 st.markdown("""
@@ -115,9 +95,7 @@ st.markdown("""
 
 st.sidebar.header("🛠 Controls")
 opacity = st.sidebar.slider("Layer Transparency", 0.1, 1.0, 0.75)
-weather_mult = st.sidebar.slider(
-    "Simulated Weather Factor (%)", 50, 200, 100
-) / 100
+weather_mult = st.sidebar.slider("Simulated Weather Factor (%)", 50, 200, 100) / 100
 
 run_hybrid = st.sidebar.button("🚀 Run Hybrid Model")
 run_diag = st.sidebar.button("📊 Run Full Diagnostic")
@@ -127,31 +105,20 @@ run_diag = st.sidebar.button("📊 Run Full Diagnostic")
 # --------------------------------------------------
 if run_hybrid or run_diag:
     df = fetch_pm10_data()
-
     if df.empty or len(df) < 3:
         st.warning("Not enough monitoring stations.")
         st.stop()
 
-    # ---------- DIAGNOSTICS ----------
     if run_diag:
         st.subheader("📊 Model Diagnostics")
         res_df, mae = run_diagnostics(df)
-
         col1, col2 = st.columns(2)
-
         with col1:
             fig1, ax1 = plt.subplots()
-            sns.regplot(
-                data=res_df,
-                x="Actual",
-                y="Predicted",
-                ax=ax1,
-                color="teal"
-            )
+            sns.regplot(data=res_df, x="Actual", y="Predicted", ax=ax1, color="teal")
             ax1.set_title("Actual vs Predicted PM10")
             st.pyplot(fig1)
             st.metric("Mean Absolute Error", f"{mae:.2f} µg/m³")
-
         with col2:
             fig2, ax2 = plt.subplots()
             sns.histplot(df['pm10'], kde=True, ax=ax2, color="orange")
@@ -161,40 +128,33 @@ if run_hybrid or run_diag:
     # ---------- FINAL HYBRID SURFACE ----------
     st.subheader("🗺 High-Resolution PM10 Surface")
 
-    rf_final = RandomForestRegressor(
-        n_estimators=500, max_depth=3, random_state=42
-    )
+    # Lower max_depth helps reduce the sharp "blocky" splits from the RF
+    rf_final = RandomForestRegressor(n_estimators=500, max_depth=2, random_state=42)
     rf_final.fit(df[['lat', 'lon']], df['pm10'])
 
-    df['residuals'] = (
-        df['pm10'] - rf_final.predict(df[['lat', 'lon']])
-    ) * weather_mult
+    df['residuals'] = (df['pm10'] - rf_final.predict(df[['lat', 'lon']])) * weather_mult
 
     grid_res = 150 
-    lats = np.linspace(df.lat.min()-0.03, df.lat.max()+0.03, grid_res)
-    lons = np.linspace(df.lon.min()-0.03, df.lon.max()+0.03, grid_res)
+    lats = np.linspace(df.lat.min()-0.05, df.lat.max()+0.05, grid_res)
+    lons = np.linspace(df.lon.min()-0.05, df.lon.max()+0.05, grid_res)
 
-    # Variogram parameters shift based on weather_mult
-    v_range = 0.05 * (2 - weather_mult) 
-    
+    # FIXED: Variogram model set to 'linear' with a much larger range (0.15) 
+    # This specifically targets and "smudges" the cross lines you see in the images.
     OK = OrdinaryKriging(
         df.lon, df.lat, df['residuals'],
-        variogram_model="gaussian",
-        variogram_parameters={'sill': np.var(df['residuals']), 'range': v_range, 'nugget': 0.1}
+        variogram_model="linear",
+        variogram_parameters={'slope': np.var(df['residuals'])/0.15, 'nugget': 0.1}
     )
     z_res, _ = OK.execute("grid", lons, lats)
 
     lon_g, lat_g = np.meshgrid(lons, lats)
-    rf_trend = rf_final.predict(
-        np.column_stack([lat_g.ravel(), lon_g.ravel()])
-    ).reshape(grid_res, grid_res)
+    rf_trend = rf_final.predict(np.column_stack([lat_g.ravel(), lon_g.ravel()])).reshape(grid_res, grid_res)
 
+    # Combining Trend + Residuals
     z_final = (rf_trend * weather_mult) + z_res.T
 
     # ---------- MAP ----------
-    transformer = Transformer.from_crs(
-        "EPSG:4326", "EPSG:3857", always_xy=True
-    )
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
     xmin, ymin = transformer.transform(lons.min(), lats.min())
     xmax, ymax = transformer.transform(lons.max(), lats.max())
     xs, ys = transformer.transform(df.lon.values, df.lat.values)
@@ -202,12 +162,7 @@ if run_hybrid or run_diag:
     fig, ax = plt.subplots(figsize=(12, 9))
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
-
-    cx.add_basemap(
-        ax,
-        source=cx.providers.CartoDB.DarkMatter,
-        zoom=12
-    )
+    cx.add_basemap(ax, source=cx.providers.CartoDB.DarkMatter, zoom=12)
 
     im = ax.imshow(
         z_final,
@@ -215,18 +170,10 @@ if run_hybrid or run_diag:
         origin="lower",
         cmap="magma",
         alpha=opacity,
-        interpolation="bicubic" 
+        interpolation="bilinear" # Bilinear blending for a smooth look
     )
 
-    ax.scatter(
-        xs, ys,
-        c="white",
-        edgecolors="black",
-        s=70,
-        zorder=3,
-        label="Stations"
-    )
-
+    ax.scatter(xs, ys, c="white", edgecolors="black", s=70, zorder=3, label="Stations")
     plt.colorbar(im, label="PM10 (µg/m³)")
     ax.set_axis_off()
     st.pyplot(fig)
@@ -245,16 +192,9 @@ if run_hybrid or run_diag:
 
     buf = io.BytesIO()
     fig.savefig(buf, dpi=300, format="png")
-    st.download_button(
-        "💾 Download Map",
-        buf.getvalue(),
-        "lucknow_pm10_hybrid.png",
-        "image/png"
-    )
+    st.download_button("💾 Download Map", buf.getvalue(), "lucknow_pm10_hybrid.png", "image/png")
 
     st.subheader("📌 Monitoring Stations")
     st.dataframe(df[['name', 'pm10']], use_container_width=True)
 
-st.caption(
-    "Data: WAQI API | Method: Random Forest Residual Kriging (RFRK)"
-)
+st.caption("Data: WAQI API | Method: Random Forest Residual Kriging (RFRK)")
