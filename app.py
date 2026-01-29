@@ -10,6 +10,8 @@ from pykrige.ok import OrdinaryKriging
 from sklearn.ensemble import RandomForestRegressor
 import time
 import io
+# NEW: Import for auto-refresh
+from streamlit_autorefresh import st_autorefresh
 
 # --------------------------------------------------
 # CONFIGURATION
@@ -22,6 +24,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# NEW: Run every 30 minutes (1800000 milliseconds)
+# This will update the map automatically with live API data
+count = st_autorefresh(interval=1800000, key="fizzbuzz")
 
 # --------------------------------------------------
 # DATA PIPELINE (UNCHANGED)
@@ -80,7 +86,7 @@ def run_diagnostics(df):
         try:
             ok = OrdinaryKriging(
                 train.lon, train.lat, residuals,
-                variogram_model="spherical",
+                variogram_model="gaussian",
                 verbose=False
             )
             p_res, _ = ok.execute("points", [test.lon], [test.lat])
@@ -98,6 +104,9 @@ def run_diagnostics(df):
 # MAIN UI
 # --------------------------------------------------
 st.title("📍 Lucknow PM10 Hybrid Spatial Analysis")
+
+# Visual indicator of refresh status
+st.sidebar.caption(f"Last data refresh: {time.strftime('%H:%M:%S')}")
 
 st.markdown("""
 **Method:** Random Forest for spatial trend + Ordinary Kriging on residuals  
@@ -153,7 +162,7 @@ if run_hybrid or run_diag:
     st.subheader("🗺 High-Resolution PM10 Surface")
 
     rf_final = RandomForestRegressor(
-        n_estimators=200, max_depth=6, random_state=42
+        n_estimators=500, max_depth=3, random_state=42
     )
     rf_final.fit(df[['lat', 'lon']], df['pm10'])
 
@@ -161,13 +170,17 @@ if run_hybrid or run_diag:
         df['pm10'] - rf_final.predict(df[['lat', 'lon']])
     ) * weather_mult
 
-    grid_res = 250 
+    grid_res = 150 
     lats = np.linspace(df.lat.min()-0.03, df.lat.max()+0.03, grid_res)
     lons = np.linspace(df.lon.min()-0.03, df.lon.max()+0.03, grid_res)
 
+    # Variogram parameters shift based on weather_mult
+    v_range = 0.05 * (2 - weather_mult) 
+    
     OK = OrdinaryKriging(
         df.lon, df.lat, df['residuals'],
-        variogram_model="spherical" 
+        variogram_model="gaussian",
+        variogram_parameters={'sill': np.var(df['residuals']), 'range': v_range, 'nugget': 0.1}
     )
     z_res, _ = OK.execute("grid", lons, lats)
 
@@ -202,7 +215,7 @@ if run_hybrid or run_diag:
         origin="lower",
         cmap="magma",
         alpha=opacity,
-        interpolation="bilinear" 
+        interpolation="bicubic" 
     )
 
     ax.scatter(
@@ -218,7 +231,7 @@ if run_hybrid or run_diag:
     ax.set_axis_off()
     st.pyplot(fig)
 
-    # --- ADDED: PM10 SAFETY LEGEND ---
+    # PM10 SAFETY LEGEND
     st.sidebar.markdown("---")
     st.sidebar.subheader("🌡 PM10 Health Scale")
     st.sidebar.info("""
