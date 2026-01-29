@@ -153,6 +153,16 @@ st.sidebar.caption(f"Last refresh: {time.strftime('%H:%M:%S')}")
 # --------------------------------------------------
 # SIDEBAR
 # --------------------------------------------------
+
+# -------------------------------
+# LOAD FULL HISTORICAL DATA
+# -------------------------------
+if os.path.exists(DB_FILE):
+    df_history = pd.read_csv(DB_FILE)
+else:
+    df_history = pd.DataFrame()
+if not df_history.empty:
+    st.sidebar.metric("Historical Samples", len(df_history))
 st.sidebar.header("🛠 Controls")
 opacity = st.sidebar.slider("Layer Transparency", 0.1, 1.0, 0.75)
 weather_mult = st.sidebar.slider("Weather Amplification (%)", 50, 200, 100) / 100
@@ -241,6 +251,24 @@ if run_hybrid or run_diag or predict_custom:
     z_final[z_final < 0] = 0
 
     # --- MAP ---
+    st.subheader("📂 Historical PM10 Database")
+
+    if not df_history.empty:
+        st.metric("Total Historical Records", len(df_history))
+
+        st.dataframe(
+            df_history.sort_values("timestamp", ascending=False),
+            use_container_width=True
+        )
+
+        st.download_button(
+            label="📥 Download Full Historical CSV",
+            data=df_history.to_csv(index=False).encode("utf-8"),
+            file_name="lucknow_pm10_history.csv",
+            mime="text/csv"
+       )
+    else:
+        st.info("No historical data collected yet.")
     transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
 
     xmin, ymin = transformer.transform(lons.min(), lats.min())
