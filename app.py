@@ -13,8 +13,9 @@ import time
 import io
 import os
 from streamlit_autorefresh import st_autorefresh
-import datetime # Import the datetime module
-import matplotlib.patches as mpatches # Import for custom legend patches
+import datetime 
+import matplotlib.patches as mpatches 
+from scipy.ndimage import gaussian_filter # Added for smoothing artifacts
 
 # --------------------------------------------------
 # CONFIGURATION
@@ -237,8 +238,10 @@ if run_hybrid or run_diag or predict_custom:
     rf_trend = rf_final.predict(np.column_stack([lat_g.ravel(), lon_g.ravel()])).reshape(grid_res, grid_res)
 
     z_final = (rf_trend * weather_mult) + z_res.T
-
     z_final[z_final < 0] = 0
+    
+    # SMOOTHING STEP: This removes the "cross lines" caused by the grid interpolation
+    z_final = gaussian_filter(z_final, sigma=0.6)
 
     # ---------- CUSTOM PREDICTION ----------
     if predict_custom:
@@ -274,13 +277,15 @@ if run_hybrid or run_diag or predict_custom:
     ax.set_ylim(ymin, ymax)
     cx.add_basemap(ax, source=cx.providers.CartoDB.DarkMatter, zoom=12)
 
+    # Updated imshow with bilinear interpolation to remove grid lines
     im = ax.imshow(
         z_final,
         extent=[xmin, xmax, ymin, ymax],
         origin="lower",
         cmap="magma",
         alpha=opacity,
-        interpolation="bicubic"
+        interpolation="bilinear",
+        resample=True
     )
 
     ax.scatter(xs, ys, c="white", edgecolors="black", s=70, zorder=3, label="Stations")
@@ -292,10 +297,10 @@ if run_hybrid or run_diag or predict_custom:
         ax.scatter(custom_x, custom_y, c="red", marker="X", s=200, zorder=4, label="Custom Location")
         ax.text(custom_x, custom_y, f"{st.session_state.custom_pm10_prediction:.1f}", color='white', fontsize=10, ha='left', va='bottom', bbox=dict(facecolor='black', alpha=0.5, edgecolor='none'))
 
-    ax.legend() # Show legend after adding custom location
+    ax.legend() 
     ax.set_axis_off()
 
-    # HEALTH SCALE LEGEND - Defined categories and colors
+    # HEALTH SCALE LEGEND
     health_categories = [
         {'label': '0-50: Good', 'color': '#00e400'},
         {'label': '51-100: Satisfactory', 'color': '#ffff00'},
@@ -305,16 +310,13 @@ if run_hybrid or run_diag or predict_custom:
         {'label': '430+: Severe', 'color': '#7e0023'}
     ]
 
-    # Create legend handles
     legend_patches = []
     for category in health_categories:
         legend_patches.append(mpatches.Patch(color=category['color'], label=category['label']))
 
-    # Add custom legend to the map
     ax.legend(handles=legend_patches, loc='upper left', bbox_to_anchor=(1.02, 1), title="PM10 Health Scale", facecolor='white', framealpha=0.8)
 
     st.pyplot(fig)
-
 
     buf = io.BytesIO()
     fig.savefig(buf, dpi=300, format="png")
@@ -329,22 +331,18 @@ if run_hybrid or run_diag or predict_custom:
         df_trend = pd.read_csv(DB_FILE)
         df_trend['timestamp'] = pd.to_datetime(df_trend['timestamp'])
 
-        # Filter historical data based on selected dates
         df_filtered = df_trend[(df_trend['timestamp'].dt.date >= start_date) & (df_trend['timestamp'].dt.date <= end_date)].copy()
 
         if len(df_filtered) > 5:
             df_resampled = df_filtered.set_index('timestamp').resample('H').mean(numeric_only=True).dropna()
 
-            # Predictive Logic: Linear Regression on the last few hours
             X = np.array(range(len(df_resampled))).reshape(-1, 1)
             y = df_resampled['pm10'].values
             model = LinearRegression().fit(X, y)
 
-            # Forecast next 3 hours
             future_indices = np.array(range(len(df_resampled), len(df_resampled) + 3)).reshape(-1, 1)
             future_preds = model.predict(future_indices)
 
-            # Generate future timestamps
             last_time = df_resampled.index[-1]
             future_times = [last_time + pd.Timedelta(hours=i) for i in range(1, 4)]
 
@@ -358,6 +356,6 @@ if run_hybrid or run_diag or predict_custom:
             plt.xticks(rotation=45)
             st.pyplot(fig_trend)
         else:
-            st.info("Accumulating data for forecast or not enough data for selected date range. Please select a different date range or wait for more refresh cycles.")
+            st.info("Accumulating data for forecast or not enough data for selected date range.")
 
 st.caption("Data: WAQI API | Method: Random Forest Residual Kriging (RFRK)")
