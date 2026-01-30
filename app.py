@@ -284,15 +284,17 @@ if run_hybrid or run_diag or predict_custom:
     cx.add_basemap(ax, source=cx.providers.CartoDB.DarkMatter, zoom=12)
 
     # --- MAP --- (Corrected imshow mapping)
+    # --- MAP --- 
+    # (Updated this specific block to fix the "lines" issue)
     im = ax.imshow(
         z_final,
         extent=[xmin, xmax, ymin, ymax],
-        origin="lower",  # This ensures the latitude increases upwards
+        origin="lower", 
         cmap="magma",
         alpha=opacity,
-        interpolation="bilinear", # Changed from 'hamming' for smoother spatial blending
+        interpolation="bilinear", # Changed for smoother spatial distribution
         zorder=2,
-        aspect='auto' # Ensures the data fills the defined extent
+        aspect='auto'             # Forces the data to fill the map bounds
     )
 
     # Stations
