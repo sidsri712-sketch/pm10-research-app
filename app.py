@@ -355,17 +355,43 @@ if run_hybrid or run_diag or predict_custom:
         st.metric("Predicted PM10", f"{c_val:.2f} µg/m³")
 
     # TREND
-    st.subheader("📈 Trend & Forecast")
+# --------------------------------------------------
+    # TREND & 24-HOUR FUTURE FORECAST
+    # --------------------------------------------------
+    st.subheader("📈 Trend & 24-Hour Forecast")
+    
     df_f = df_train[
         (df_train["timestamp"].dt.date >= start_date) &
         (df_train["timestamp"].dt.date <= end_date)
     ]
-    if len(df_f) > 5:
-        df_r = df_f.set_index("timestamp").resample("H").mean(numeric_only=True).dropna()
-        model = LinearRegression().fit(
-            np.arange(len(df_r)).reshape(-1, 1),
-            df_r["pm10"].values
-        )
-        st.line_chart(df_r["pm10"])
 
-st.caption("Data: WAQI + Open-Meteo | Model: Random Forest Residual Kriging")
+    if len(df_f) > 5:
+        # 1. Historical Trend
+        df_r = df_f.set_index("timestamp").resample("H").mean(numeric_only=True).dropna()
+        
+        # 2. Generate Future Timestamps for Forecast
+        future_times = [pd.Timestamp.now() + pd.Timedelta(hours=i) for i in range(1, 25)]
+        
+        # Fetch future weather (simplified from your weather_now or Open-Meteo)
+        # For a true forecast, we use the model's trained features
+        future_preds = []
+        for ft in future_times:
+            # We assume weather stays similar to 'now' for the baseline forecast,
+            # or you can pull future weather arrays here.
+            pred = rf.predict([[
+                custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month,
+                weather_now["temp"], weather_now["hum"], weather_now["wind"]
+            ]])[0]
+            future_preds.append({"timestamp": ft, "pm10": pred, "Type": "Forecast"})
+
+        df_forecast = pd.DataFrame(future_preds).set_index("timestamp")
+        
+        # Combine Historical and Forecast for the chart
+        df_r["Type"] = "Historical"
+        chart_data = pd.concat([df_r[["pm10", "Type"]], df_forecast])
+
+        # Display Chart
+        st.line_chart(chart_data["pm10"])
+        st.caption("The graph shows historical averages followed by a 24-hour prediction based on time-cycles.")
+    else:
+        st.info("Collect more historical data to enable forecasting.")
