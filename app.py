@@ -286,15 +286,17 @@ if run_hybrid or run_diag or predict_custom:
     # --- MAP --- (Corrected imshow mapping)
     # --- MAP --- 
     # (Updated this specific block to fix the "lines" issue)
+    # --- MAP ---
+    # This block is updated to ensure the heatmap spreads correctly
     im = ax.imshow(
         z_final,
         extent=[xmin, xmax, ymin, ymax],
-        origin="lower", 
+        origin="lower",
         cmap="magma",
         alpha=opacity,
-        interpolation="bilinear", # Changed for smoother spatial distribution
+        interpolation="bilinear", # Smoother than 'hamming' for spatial grids
         zorder=2,
-        aspect='auto'             # Forces the data to fill the map bounds
+        aspect='auto'             # Ensures data spreads to the full extent of the map
     )
 
     # Stations
