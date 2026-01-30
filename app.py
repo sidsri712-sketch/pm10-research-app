@@ -283,14 +283,16 @@ if run_hybrid or run_diag or predict_custom:
     # Basemap AFTER limits
     cx.add_basemap(ax, source=cx.providers.CartoDB.DarkMatter, zoom=12)
 
+    # --- MAP --- (Corrected imshow mapping)
     im = ax.imshow(
         z_final,
         extent=[xmin, xmax, ymin, ymax],
-        origin="lower",
+        origin="lower",  # This ensures the latitude increases upwards
         cmap="magma",
         alpha=opacity,
-        interpolation="hamming",
-        zorder=2
+        interpolation="bilinear", # Changed from 'hamming' for smoother spatial blending
+        zorder=2,
+        aspect='auto' # Ensures the data fills the defined extent
     )
 
     # Stations
