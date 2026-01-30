@@ -251,6 +251,34 @@ if run_hybrid or run_diag or predict_custom:
     z_final[z_final < 0] = 0
 
     # --- MAP ---
+    # GRID - Increased buffer to 0.1 to allow radial dispersion
+    grid_res = 250
+    lats = np.linspace(df_live.lat.min()-0.1, df_live.lat.max()+0.1, grid_res)
+    lons = np.linspace(df_live.lon.min()-0.1, df_live.lon.max()+0.1, grid_res)
+
+    try:
+        OK = OrdinaryKriging(df_live.lon, df_live.lat, df_live["residuals"], variogram_model="gaussian")
+        z_res, _ = OK.execute("grid", lons, lats)
+    except:
+        z_res = np.zeros((grid_res, grid_res))
+
+    lon_g, lat_g = np.meshgrid(lons, lats)
+
+    rf_trend = rf.predict(np.column_stack([
+        lat_g.ravel(), lon_g.ravel(),
+        np.full(lat_g.size, now.hour),
+        np.full(lat_g.size, now.dayofweek),
+        np.full(lat_g.size, now.month),
+        np.full(lat_g.size, weather_now["temp"]),
+        np.full(lat_g.size, weather_now["hum"]),
+        np.full(lat_g.size, weather_now["wind"])
+    ])).reshape(grid_res, grid_res)
+
+    # Increased sigma for a circular, diffused look
+    z_final = gaussian_filter(rf_trend * weather_mult + z_res.T, sigma=3.0)
+    z_final[z_final < 0] = 0
+
+    # --- MAP ---
     st.subheader("📂 Historical PM10 Database")
 
     if not df_history.empty:
@@ -276,32 +304,37 @@ if run_hybrid or run_diag or predict_custom:
 
     fig, ax = plt.subplots(figsize=(12, 9))
 
-    # 🔑 THIS IS THE FIX
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
 
-    # Basemap AFTER limits
     cx.add_basemap(ax, source=cx.providers.CartoDB.DarkMatter, zoom=12)
 
-    # --- MAP --- (Corrected imshow mapping)
-    # --- MAP --- 
-    # (Updated this specific block to fix the "lines" issue)
-    # --- MAP ---
-    # This block is updated to ensure the heatmap spreads correctly
+    # Rendering logic changed to 'equal' aspect to prevent broad lines
     im = ax.imshow(
         z_final,
         extent=[xmin, xmax, ymin, ymax],
         origin="lower",
         cmap="magma",
         alpha=opacity,
-        interpolation="bilinear", # Smoother than 'hamming' for spatial grids
+        interpolation="bicubic",
         zorder=2,
-        aspect='auto'             # Ensures data spreads to the full extent of the map
+        aspect='equal' 
+    )
+
+    # Added subtle contour lines to define the heat zones
+    ax.contour(
+        z_final,
+        levels=10, 
+        extent=[xmin, xmax, ymin, ymax],
+        colors='white',
+        alpha=0.2,
+        linewidths=0.5,
+        zorder=3
     )
 
     # Stations
     xs, ys = transformer.transform(df_live.lon.values, df_live.lat.values)
-    ax.scatter(xs, ys, c="white", edgecolors="black", s=70, zorder=3, label="Stations")
+    ax.scatter(xs, ys, c="white", edgecolors="black", s=70, zorder=4, label="Stations")
 
     plt.colorbar(im, ax=ax, label="PM10 (µg/m³)")
     ax.legend()
