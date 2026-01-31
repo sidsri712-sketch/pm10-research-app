@@ -34,3 +34,5 @@ matplotlib
 pyvista
 stmol
 ipywidgets
+py3Dmol
+ipython_genutils
