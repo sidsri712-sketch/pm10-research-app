@@ -21,3 +21,4 @@ pykrige
 scikit-learn
 scipy
 streamlit-autorefresh
+st-supabase-connection
