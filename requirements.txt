@@ -33,3 +33,4 @@ plotly
 matplotlib
 pyvista
 stmol
+ipywidgets
