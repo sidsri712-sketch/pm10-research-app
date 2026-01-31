@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import contextily as cx
 from pyproj import Transformer
+from pyproj import Transformer
 from pykrige.ok import OrdinaryKriging
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
@@ -24,6 +25,10 @@ TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
 LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
 DB_FILE = "lucknow_pm10_history.csv"
 
+# THINGSPEAK CONFIG (New Integration)
+TS_CHANNEL_ID = "3245947"
+TS_READ_KEY = "KMFZAL0I4BI752II"
+
 st.set_page_config(
     page_title="Lucknow PM10 Hybrid Spatial Model",
     layout="wide",
@@ -32,6 +37,19 @@ st.set_page_config(
 
 # Auto-refresh every 30 minutes
 st_autorefresh(interval=1800000, key="refresh")
+
+# --------------------------------------------------
+# THINGSPEAK FETCH (New Feature)
+# --------------------------------------------------
+def fetch_thingspeak_data():
+    try:
+        url = f"https://api.thingspeak.com/channels/{TS_CHANNEL_ID}/feeds.json?api_key={TS_READ_KEY}&results=1"
+        r = requests.get(url, timeout=5).json()
+        if "feeds" in r and len(r["feeds"]) > 0:
+            return r["feeds"][-1]
+    except:
+        return None
+    return None
 
 # --------------------------------------------------
 # WEATHER FETCH (OPEN-METEO)
@@ -164,6 +182,16 @@ else:
 if not df_history.empty:
     st.sidebar.metric("Historical Samples", len(df_history))
 st.sidebar.header("🛠 Controls")
+
+# --- LIVE SENSOR LINK (New Sidebar Feature) ---
+st.sidebar.subheader("📡 Live Sensor Link")
+ts_data = fetch_thingspeak_data()
+if ts_data:
+    st.sidebar.success(f"Live Node PM10: {ts_data.get('field1', 'N/A')} µg/m³")
+    st.sidebar.caption(f"Last Sensor Sync: {ts_data.get('created_at')}")
+else:
+    st.sidebar.info("Waiting for ThingSpeak Sensor...")
+
 opacity = st.sidebar.slider("Layer Transparency", 0.1, 1.0, 0.75)
 weather_mult = st.sidebar.slider("Weather Amplification (%)", 50, 200, 100) / 100
 
@@ -373,11 +401,8 @@ if run_hybrid or run_diag or predict_custom:
         future_times = [pd.Timestamp.now() + pd.Timedelta(hours=i) for i in range(1, 25)]
         
         # Fetch future weather (simplified from your weather_now or Open-Meteo)
-        # For a true forecast, we use the model's trained features
         future_preds = []
         for ft in future_times:
-            # We assume weather stays similar to 'now' for the baseline forecast,
-            # or you can pull future weather arrays here.
             pred = rf.predict([[
                 custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month,
                 weather_now["temp"], weather_now["hum"], weather_now["wind"]
