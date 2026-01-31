@@ -15,8 +15,9 @@ from stmol import showmol
 LOG_FILE = "bio_twin_log.csv"
 
 st.set_page_config(
-    page_title="Bio-Twin Intelligent Fermentation Platform",
-    layout="wide"
+    page_title="Bio-Twin",
+    page_icon="🧬"
+    layout= "wide"
 )
 
 st.title("🧬 Bio-Twin Intelligent Fermentation Platform")
