@@ -4,106 +4,67 @@ import pandas as pd
 import requests
 from scipy.integrate import odeint
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="Bio-Twin Intelligent Platform", page_icon="🧬", layout="wide")
-
-# Professional Styling for the metrics
-st.markdown("""
-    <style>
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
-    </style>
-    """, unsafe_allow_html=True)
-
+# --- CONFIG ---
+st.set_page_config(page_title="Bio-Twin Pro", page_icon="🧬", layout="wide")
 st.title("🧬 Bio-Twin Intelligent Fermentation")
-st.caption("Real-time Digital Twin & Predictive Kinetic Engine")
-st.divider()
 
-# --- THE DATA FETCH ENGINE ---
-def fetch_live_data():
-    """
-    Fetches hardware data from ThingSpeak. 
-    Includes a fix for the 'int is not iterable' error.
-    """
+# --- THE CONNECTION FIX ---
+def fetch_thingspeak_latest():
     try:
-        # --- FIX STARTS HERE ---
-        # We grab the secrets and immediately force them to be strings (text)
-        # This prevents the app from crashing even if you typed numbers without quotes.
-        raw_id = st.secrets.get("THINGSPEAK_CHANNEL_ID", "0")
-        chid = str(raw_id).strip().replace('"', '') 
+        # We grab the secrets and force them to be text (strings) 
+        # This prevents the 'int is not iterable' crash
+        cid = str(st.secrets.get("THINGSPEAK_CHANNEL_ID", "")).strip()
+        key = str(st.secrets.get("THINGSPEAK_READ_KEY", "")).strip()
+
+        if not cid or not key:
+            return None, "Offline (Check Secrets)"
+
+        # Build URL using .format() to ensure no 'int' errors
+        url = "https://api.thingspeak.com/channels/{}/feeds.json?api_key={}&results=1".format(cid, key)
         
-        raw_key = st.secrets.get("THINGSPEAK_READ_KEY", "")
-        key = str(raw_key).strip().replace('"', '')
-        # --- FIX ENDS HERE ---
-
-        if not chid or chid == "0":
-            return None, "Configure Secrets in Dashboard"
-
-        # Using the clean 'chid' and 'key' strings to build the URL
-        url = f"https://api.thingspeak.com/channels/{chid}/feeds.json?api_key={key}&results=1"
         r = requests.get(url, timeout=5).json()
         
         if "feeds" in r and len(r["feeds"]) > 0:
             f = r["feeds"][-1]
             return {
                 "pH": float(f.get("field1", 7.0)),
-                "Temp": float(f.get("field2", 30.0)),
-                "DO": float(f.get("field3", 90.0)),
-                "Time": f.get("created_at", "N/A")
+                "temp": float(f.get("field2", 30.0)),
+                "DO": float(f.get("field3", 95.0)),
+                "time": f.get("created_at", "N/A")
             }, "Online"
-        return None, "Channel is Empty"
+        return None, "No Data Found"
     except Exception as e:
-        return None, f"Connection Error: {str(e)}"
+        return None, f"Error: {str(e)}"
 
-# --- SIDEBAR CONTROL ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.header("🎮 Control Center")
-    demo = st.toggle("Demo Mode (Simulator)", value=False)
-    st.divider()
-    target_yield = st.slider("Target Biomass (g/L)", 1.0, 15.0, 5.0)
+    st.header("Settings")
+    use_mock = st.toggle("Demo Mode", value=False)
+    target_yield = st.slider("Target Yield (g/L)", 1.0, 15.0, 5.0)
 
-# Data Processing Logic
-if demo:
-    data, status = {"pH": 5.4, "Temp": 31.5, "DO": 92, "Time": "Manual"}, "Simulating"
-else:
-    data, status = fetch_live_data()
+# Fetch data
+sensor, status = ({"pH": 5.5, "temp": 30.0, "DO": 90, "time": "Demo"}, "Simulating") if use_mock else fetch_thingspeak_latest()
 
-# --- TOP METRIC DISPLAY ---
+# --- TOP METRICS ---
 c1, c2, c3, c4 = st.columns(4)
-if data:
-    c1.metric("Live pH", data["pH"])
-    c2.metric("Temp (°C)", data["Temp"])
-    c3.metric("DO (%)", data["DO"])
-    c4.metric("Hardware Status", status)
+if sensor:
+    c1.metric("pH", sensor["pH"])
+    c2.metric("Temp (°C)", sensor["temp"])
+    c3.metric("DO (%)", sensor["DO"])
+    c4.metric("Status", status)
 else:
-    st.error(f"📡 System Alert: {status}")
+    st.error(f"📡 Connection Alert: {status}")
 
-# --- DASHBOARD TABS ---
+# --- TABS (Original logic preserved) ---
 tab1, tab2, tab3 = st.tabs(["📊 Digital Twin", "🤖 AI Optimizer", "📜 Logs"])
 
 with tab1:
-    col_left, col_right = st.columns([3, 1])
-    with col_left:
-        st.subheader("Predicted Biomass Growth Curve")
-        # Creating a dynamic growth simulation
-        t = np.linspace(0, 48, 100)
-        growth = (target_yield / (1 + np.exp(-0.25 * (t - 22))))
-        df = pd.DataFrame({"Time (hr)": t, "Biomass (g/L)": growth}).set_index("Time (hr)")
-        st.line_chart(df, color="#007bff")
-    
-    with col_right:
-        st.subheader("Batch Analytics")
-        current_val = round(growth[-1], 2)
-        st.write(f"**Current Est. Harvest:** {current_val} g/L")
-        st.progress(min(current_val/target_yield, 1.0))
+    st.subheader("Predicted Biomass Accumulation")
+    t = np.linspace(0, 48, 100)
+    growth = (target_yield / (1 + np.exp(-0.2 * (t - 24))))
+    st.line_chart(pd.DataFrame({"Time": t, "Biomass": growth}).set_index("Time"))
 
 with tab2:
-    st.subheader("🤖 AI Recipe Generator")
-    if st.button("Generate Optimization Strategy"):
-        with st.spinner("Processing kinetic profiles..."):
-            st.success("Optimization Complete")
-            st.json({
-                "Rec. pH": 5.55,
-                "Rec. Temperature": "30.2°C",
-                "Est. Time to Harvest": "34.2 Hours",
-                "Yield Confidence": "96.4%"
-            })
+    st.subheader("AI Recipe Generator")
+    if st.button("Generate Optimization"):
+        st.json({"Rec. pH": 5.5, "Rec. Temp": "30.2C", "Confidence": "96%"})
