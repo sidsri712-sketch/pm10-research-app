@@ -23,7 +23,7 @@ st.set_page_config(
 )
 
 # Initialize Supabase Connection using the keys from your secrets
-conn = st.connection("supabase", type=SupabaseConnection)
+conn = st.connection("supabase", type=SupabaseConnection, ttl=600)
 
 # --------------------------------------------------
 # CONFIGURATION
