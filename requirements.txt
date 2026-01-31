@@ -22,3 +22,14 @@ scikit-learn
 scipy
 streamlit-autorefresh
 st-supabase-connection
+streamlit
+numpy
+pandas
+requests
+scipy
+scikit-learn
+opencv-python-headless
+plotly
+matplotlib
+pyvista
+stmol
