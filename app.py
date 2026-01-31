@@ -15,14 +15,14 @@ import time
 import os
 from st_supabase_connection import SupabaseConnection
 
-# 1. THIS MUST BE THE FIRST STREAMLIT COMMAND
+# THIS MUST BE THE FIRST STREAMLIT COMMAND
 st.set_page_config(
     page_title="Lucknow PM10 Hybrid Spatial Model",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# 2. INITIALIZE CONNECTION AFTER CONFIG
+# Initialize Supabase Connection using the keys from your secrets
 conn = st.connection("supabase", type=SupabaseConnection)
 
 # --------------------------------------------------
@@ -135,6 +135,7 @@ st.sidebar.caption(f"Last refresh: {time.strftime('%H:%M:%S')}")
 # --------------------------------------------------
 # LOAD DATA FROM SUPABASE
 # --------------------------------------------------
+# Pull data from Supabase for the sidebar and model
 try:
     res = conn.table("pm10_history").select("*").execute()
     df_history = pd.DataFrame(res.data)
