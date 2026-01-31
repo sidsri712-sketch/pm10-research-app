@@ -16,13 +16,22 @@ import datetime
 import time
 import io
 import os
+from st_supabase_connection import SupabaseConnection
 
 # --------------------------------------------------
 # CONFIGURATION
 # --------------------------------------------------
 TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
 LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
-DB_FILE = "lucknow_pm10_history.csv"
+
+st.set_page_config(
+    page_title="Lucknow PM10 Hybrid Spatial Model",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Initialize Supabase Connection
+conn = st.connection("supabase", type=SupabaseConnection)
 
 st.set_page_config(
     page_title="Lucknow PM10 Hybrid Spatial Model",
@@ -65,48 +74,35 @@ def fetch_pm10_data():
         r = requests.get(url).json()
         if r.get("status") == "ok":
             for s in r["data"]:
-                d = requests.get(
-                    f"https://api.waqi.info/feed/@{s['uid']}/?token={TOKEN}"
-                ).json()
+                d = requests.get(f"https://api.waqi.info/feed/@{s['uid']}/?token={TOKEN}").json()
                 if d.get("status") == "ok" and "pm10" in d["data"].get("iaqi", {}):
                     records.append({
                         "lat": s["lat"],
                         "lon": s["lon"],
-                        "pm10": d["data"]["iaqi"]["pm10"]["v"],
+                        "pm10": float(d["data"]["iaqi"]["pm10"]["v"]),
                         "name": d["data"]["city"]["name"],
                         "temp": weather["temp"],
                         "hum": weather["hum"],
                         "wind": weather["wind"],
-                        "timestamp": pd.Timestamp.now()
+                        "timestamp": pd.Timestamp.now().isoformat()
                     })
                 time.sleep(0.1)
 
-        df_live = pd.DataFrame(records)
+        if records:
+            conn.table("pm10_history").insert(records).execute()
 
-        if not df_live.empty:
-            if os.path.exists(DB_FILE):
-                df_hist = pd.read_csv(DB_FILE)
-                df_all = pd.concat([df_hist, df_live], ignore_index=True)
-                df_all.drop_duplicates(
-                    subset=["lat", "lon", "pm10", "timestamp"],
-                    inplace=True
-                )
-                df_all.to_csv(DB_FILE, index=False)
-            else:
-                df_live.to_csv(DB_FILE, index=False)
+        # Pull history from Supabase instead of CSV
+        res = conn.table("pm10_history").select("*").execute()
+        df_all = pd.DataFrame(res.data)
 
-            return df_live.groupby(["lat", "lon"]).agg({
-                "pm10": "mean",
-                "name": "first",
-                "temp": "first",
-                "hum": "first",
-                "wind": "first"
+        if not df_all.empty:
+            return df_all.groupby(["lat", "lon"]).agg({
+                "pm10": "mean", "name": "first", "temp": "first", "hum": "first", "wind": "first"
             }).reset_index()
 
         return pd.DataFrame()
-
     except Exception as e:
-        st.error(f"API error: {e}")
+        st.error(f"Database error: {e}")
         return pd.DataFrame()
 
 # --------------------------------------------------
@@ -157,10 +153,13 @@ st.sidebar.caption(f"Last refresh: {time.strftime('%H:%M:%S')}")
 # -------------------------------
 # LOAD FULL HISTORICAL DATA
 # -------------------------------
-if os.path.exists(DB_FILE):
-    df_history = pd.read_csv(DB_FILE)
-else:
+# Pull data from Supabase for the sidebar and model
+try:
+    res = conn.table("pm10_history").select("*").execute()
+    df_history = pd.DataFrame(res.data)
+except:
     df_history = pd.DataFrame()
+
 if not df_history.empty:
     st.sidebar.metric("Historical Samples", len(df_history))
 st.sidebar.header("🛠 Controls")
@@ -204,7 +203,7 @@ if run_hybrid or run_diag or predict_custom:
             st.pyplot(fig)
 
     # TRAINING DATA
-    df_train = pd.read_csv(DB_FILE)
+    df_train = df_history.copy()
     df_train["timestamp"] = pd.to_datetime(df_train["timestamp"])
     df_train["hour"] = df_train["timestamp"].dt.hour
     df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
