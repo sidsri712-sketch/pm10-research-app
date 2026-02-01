@@ -8,10 +8,17 @@ from datetime import datetime
 import time
 
 # ==================================================
-# HARD-CODED CREDENTIALS
+# HARD-CODED CREDENTIALS & PUBLIC FALLBACKS
 # ==================================================
 TS_CHANNEL_ID = "3245928"
 TS_READ_KEY = "8P0KH1WDH7QOR0AA"
+
+# Public testing channels for robustness
+PUBLIC_CHANNELS = {
+    "My Bioreactor (Private)": {"id": "3245928", "key": "8P0KH1WDH7QOR0AA"},
+    "River Monitoring (Public)": {"id": "3122680", "key": ""},
+    "Hydroponic System (Public)": {"id": "1013172", "key": ""}
+}
 
 st.set_page_config(page_title="Bio-Twin Research Master", layout="wide")
 
@@ -56,9 +63,9 @@ st.caption(f"Version 5.2 | Growth Phase Analytics | Last Sync: {datetime.now().s
 # ==================================================
 # DATA ENGINE
 # ==================================================
-def fetch_data():
+def fetch_data(channel_id, read_key):
     try:
-        url = f"https://api.thingspeak.com/channels/{TS_CHANNEL_ID}/feeds.json?api_key={TS_READ_KEY}&results=15"
+        url = f"https://api.thingspeak.com/channels/{channel_id}/feeds.json?api_key={read_key}&results=15"
         r = requests.get(url, timeout=5).json()
         
         if "feeds" in r and len(r["feeds"]) > 0:
@@ -66,10 +73,14 @@ def fetch_data():
             latest = feeds[-1]
             df = pd.DataFrame(feeds)[['created_at', 'field1', 'field2', 'field3']]
             df.columns = ['Time', 'pH', 'Temp', 'DO']
+            
+            # Sanitizing data to ensure they are floats
+            pH_val = float(latest.get("field1")) if latest.get("field1") else 7.0
+            temp_val = float(latest.get("field2")) if latest.get("field2") else 30.0
+            do_val = float(latest.get("field3")) if latest.get("field3") else 100.0
+            
             return {
-                "latest": {"pH": float(latest.get("field1", 7.0)), 
-                           "temp": float(latest.get("field2", 30.0)), 
-                           "DO": float(latest.get("field3", 100.0))},
+                "latest": {"pH": pH_val, "temp": temp_val, "DO": do_val},
                 "history": df
             }, "🟢 System Online"
         return None, "🟠 Channel Empty"
@@ -121,11 +132,16 @@ def draw_3d_reactor(fill_level, target):
 # --- RUN LOGIC ---
 with st.sidebar:
     st.header("🎮 Reactor Control")
+    # Added selection for multiple channels
+    selected_name = st.selectbox("Select Data Source", list(PUBLIC_CHANNELS.keys()))
+    active_id = PUBLIC_CHANNELS[selected_name]["id"]
+    active_key = PUBLIC_CHANNELS[selected_name]["key"]
+    
     target_yield = st.slider("Target Yield (g/L)", 5.0, 30.0, 15.0)
     auto_refresh = st.checkbox("Enable Auto-Sync (30s)", value=True)
     if st.button("🔄 Manual Refresh"): st.rerun()
 
-fetch_result, status = fetch_data()
+fetch_result, status = fetch_data(active_id, active_key)
 live = fetch_result["latest"] if fetch_result else {"pH": 5.5, "temp": 30.0, "DO": 95.0}
 
 # --- SMART GUARD ---
