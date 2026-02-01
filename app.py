@@ -213,6 +213,8 @@ end_date = st.sidebar.date_input("End", datetime.date.today())
 if run_hybrid or run_diag or predict_custom:
 
     df_live = fetch_pm10_data()
+    # CACHE df_live FOR SOURCE ATTRIBUTION
+    st.session_state.df_live_cached = df_live.copy()
     if df_live.empty or len(df_live) < 3:
         st.warning("Not enough monitoring stations.")
         st.stop()
@@ -592,3 +594,38 @@ def estimate_source_influence_final(row):
         "Biomass": biomass,
         "Background": background
     }
+# ==================================================
+# STREAMLIT STATE FIX FOR SOURCE ATTRIBUTION
+# ==================================================
+
+if "df_live_cached" not in st.session_state:
+    st.session_state.df_live_cached = None
+# ==================================================
+# FINAL SOURCE ATTRIBUTION (STREAMLIT-SAFE)
+# ==================================================
+
+try:
+    if show_source_ui and st.session_state.df_live_cached is not None:
+
+        df_src = st.session_state.df_live_cached.copy()
+
+        source_rows = df_src.apply(
+            lambda r: pd.Series(estimate_source_influence_final(r)),
+            axis=1
+        )
+
+        df_src = pd.concat([df_src, source_rows], axis=1)
+        df_src["Dominant_Source"] = source_rows.idxmax(axis=1)
+
+        st.subheader("🧭 PM10 Source Influence (Proxy-Based)")
+        st.bar_chart(source_rows.mean())
+
+        st.dataframe(
+            df_src[
+                ["name","Traffic","Dust","Biomass","Background","Dominant_Source"]
+            ],
+            use_container_width=True
+        )
+
+except Exception as e:
+    st.warning("Run the Hybrid Model first, then enable source attribution.")
