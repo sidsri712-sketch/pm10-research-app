@@ -15,9 +15,10 @@ TS_READ_KEY = "8P0KH1WDH7QOR0AA"
 
 # Public testing channels for robustness
 PUBLIC_CHANNELS = {
-    "My Bioreactor (Private)": {"id": "3245928", "key": "8P0KH1WDH7QOR0AA"},
-    "River Monitoring (Public)": {"id": "3122680", "key": ""},
-    "Hydroponic System (Public)": {"id": "1013172", "key": ""}
+    "My Bioreactor (Private)": {"id": "3245928", "key": "8P0KH1WDH7QOR0AA", "icon": "🧪"},
+    "River Monitoring (Public)": {"id": "3122680", "key": "", "icon": "🌊"},
+    "Hydroponic System (Public)": {"id": "1013172", "key": "", "icon": "🌿"},
+    "Marine Research (Public)": {"id": "3041484", "key": "", "icon": "🐙"}
 }
 
 st.set_page_config(page_title="Bio-Twin Research Master", layout="wide")
@@ -131,15 +132,19 @@ def draw_3d_reactor(fill_level, target):
 
 # --- RUN LOGIC ---
 with st.sidebar:
-    st.header("🎮 Reactor Control")
-    # Added selection for multiple channels
+    st.header("⚙️ Reactor Control")
+    # Added selection for multiple channels with dynamic icons
     selected_name = st.selectbox("Select Data Source", list(PUBLIC_CHANNELS.keys()))
     active_id = PUBLIC_CHANNELS[selected_name]["id"]
     active_key = PUBLIC_CHANNELS[selected_name]["key"]
+    active_icon = PUBLIC_CHANNELS[selected_name]["icon"]
     
-    target_yield = st.slider("Target Yield (g/L)", 5.0, 30.0, 15.0)
-    auto_refresh = st.checkbox("Enable Auto-Sync (30s)", value=True)
-    if st.button("🔄 Manual Refresh"): st.rerun()
+    st.info(f"Connected to: {active_icon} {selected_name}")
+    st.write(f"**Channel ID:** `{active_id}`")
+    
+    target_yield = st.slider("🎯 Target Yield (g/L)", 5.0, 30.0, 15.0)
+    auto_refresh = st.checkbox("🔄 Enable Auto-Sync (30s)", value=True)
+    if st.button("⚡ Manual Refresh"): st.rerun()
 
 fetch_result, status = fetch_data(active_id, active_key)
 live = fetch_result["latest"] if fetch_result else {"pH": 5.5, "temp": 30.0, "DO": 95.0}
@@ -152,15 +157,15 @@ if live["temp"] > 35:
 
 # Dashboard Metrics
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Live pH", live["pH"], delta=round(live["pH"]-5.5, 2), delta_color="inverse")
-m2.metric("Temp (°C)", f"{live['temp']}°")
-m3.metric("Dissolved Oxygen", f"{live['DO']}%")
-m4.metric("Status", status)
+m1.metric("🧪 Live pH", live["pH"], delta=round(live["pH"]-5.5, 2), delta_color="inverse")
+m2.metric("🌡️ Temp (°C)", f"{live['temp']}°")
+m3.metric("💨 Oxygen (DO)", f"{live['DO']}%")
+m4.metric("📡 Link Status", status)
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Digital Twin", "🏗️ 3D Reactor", "🤖 AI Optimizer", "📑 Experiment Report"])
 
 with tab1:
-    st.subheader("Simulated Biomass Accumulation")
+    st.subheader("📈 Simulated Biomass Accumulation")
     time_steps, biomass_data, current_phase = solve_biomass(live["pH"], live["temp"], target_yield)
     
     # New Phase Indicator Badge
@@ -170,20 +175,20 @@ with tab1:
     st.line_chart(chart_df, color="#2ecc71")
 
 with tab2:
-    st.subheader("Real-Time Tank Volume")
+    st.subheader("🧊 Real-Time Tank Volume")
     current_vol = float(biomass_data[-1])
     col1, col2 = st.columns([2, 1])
     with col1:
         st.plotly_chart(draw_3d_reactor(current_vol, target_yield), use_container_width=True)
     with col2:
-        st.write("### Analysis")
+        st.write("### 🔍 Analysis")
         st.write(f"Mass: **{round(current_vol, 2)} g/L**")
         st.progress(min(current_vol/target_yield, 1.0))
         st.write(f"Phase: **{current_phase.split(' ')[0]}**")
 
 with tab3:
     st.subheader("🤖 AI Predictive Modeling")
-    if st.button("Calculate Optimal Recipe"):
+    if st.button("🔮 Calculate Optimal Recipe"):
         prob = 100 - (abs(live["pH"] - 5.5) * 40)
         st.success(f"Batch Success Probability: {max(0, round(prob, 1))}%")
         st.json({
@@ -197,7 +202,7 @@ with tab4:
     st.subheader("📑 Automated Research Report")
     st.markdown(f"""
     <div class="report-card">
-        <h4>Experiment Summary</h4>
+        <h4>📋 Experiment Summary</h4>
         <p><b>Date:</b> {datetime.now().strftime('%Y-%m-%d')}</p>
         <p><b>Current Phase:</b> {current_phase}</p>
         <p><b>Yield Efficiency:</b> {round((biomass_data[-1]/target_yield)*100, 1)}%</p>
@@ -206,7 +211,7 @@ with tab4:
     
     if fetch_result:
         st.write("---")
-        st.write("**Recent Hardware Logs:**")
+        st.write("**📂 Recent Hardware Logs:**")
         st.dataframe(fetch_result["history"], use_container_width=True)
         st.download_button("💾 Export to CSV", fetch_result["history"].to_csv().encode('utf-8'), "experiment_data.csv")
 
