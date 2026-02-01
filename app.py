@@ -441,6 +441,33 @@ try:
 except:
     show_source_ui = False
 # ==================================================
+# APPLY SAFE SOURCE ATTRIBUTION
+# ==================================================
+
+try:
+    if show_source_ui and "df_live" in globals():
+
+        source_rows = df_live.apply(
+            lambda r: pd.Series(estimate_source_influence(safe_row(r))),
+            axis=1
+        )
+
+        df_source_view = pd.concat([df_live, source_rows], axis=1)
+        df_source_view["Dominant_Source"] = source_rows.idxmax(axis=1)
+
+        st.subheader("🧭 PM10 Source Influence (Proxy-Based)")
+        st.bar_chart(source_rows.mean())
+
+        st.dataframe(
+            df_source_view[
+                ["name","Traffic","Dust","Biomass","Background","Dominant_Source"]
+            ],
+            use_container_width=True
+        )
+
+except:
+    pass
+# ==================================================
 # APPENDED SOURCE ATTRIBUTION DISPLAY (SAFE)
 # ==================================================
 
@@ -473,3 +500,30 @@ try:
 
 except:
     pass
+# ==================================================
+# FIX: ENSURE SOURCE ATTRIBUTION HAS REQUIRED FIELDS
+# (APPEND-ONLY, NO EXISTING CODE TOUCHED)
+# ==================================================
+
+def safe_row(row):
+    r = dict(row)
+
+    if "hour" not in r or pd.isna(r.get("hour")):
+        r["hour"] = now.hour if "now" in globals() else 12
+
+    if "dayofweek" not in r or pd.isna(r.get("dayofweek")):
+        r["dayofweek"] = now.dayofweek if "now" in globals() else 2
+
+    if "month" not in r or pd.isna(r.get("month")):
+        r["month"] = now.month if "now" in globals() else 6
+
+    if "temp" not in r or pd.isna(r.get("temp")):
+        r["temp"] = weather_now["temp"]
+
+    if "hum" not in r or pd.isna(r.get("hum")):
+        r["hum"] = weather_now["hum"]
+
+    if "wind" not in r or pd.isna(r.get("wind")):
+        r["wind"] = weather_now["wind"]
+
+    return r
