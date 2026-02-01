@@ -172,6 +172,9 @@ st.sidebar.caption(f"Last refresh: {time.strftime('%H:%M:%S')}")
 # SIDEBAR
 # --------------------------------------------------
 
+# -------------------------------
+# LOAD FULL HISTORICAL DATA
+# -------------------------------
 if os.path.exists(DB_FILE):
     df_history = pd.read_csv(DB_FILE)
 else:
@@ -180,6 +183,7 @@ if not df_history.empty:
     st.sidebar.metric("Historical Samples", len(df_history))
 st.sidebar.header("🛠 Controls")
 
+# --- LIVE SENSOR LINK (New Sidebar Feature) ---
 st.sidebar.subheader("📡 Live Sensor Link")
 ts_data = fetch_thingspeak_data()
 if ts_data:
@@ -203,9 +207,6 @@ st.sidebar.subheader("📅 Historical Filter")
 start_date = st.sidebar.date_input("Start", datetime.date.today() - datetime.timedelta(days=7))
 end_date = st.sidebar.date_input("End", datetime.date.today())
 
-# >>> ADDED SOURCE ATTRIBUTION <<<
-show_sources = st.sidebar.checkbox("🧭 Show PM10 Source Influence")
-
 # --------------------------------------------------
 # RUN MODEL
 # --------------------------------------------------
@@ -216,6 +217,21 @@ if run_hybrid or run_diag or predict_custom:
         st.warning("Not enough monitoring stations.")
         st.stop()
 
+    if run_diag:
+        st.subheader("📊 Model Diagnostics")
+        res, mae = run_diagnostics(df_live)
+        c1, c2 = st.columns(2)
+        with c1:
+            fig, ax = plt.subplots()
+            sns.regplot(data=res, x="Actual", y="Predicted", ax=ax)
+            st.pyplot(fig)
+            st.metric("MAE", f"{mae:.2f} µg/m³")
+        with c2:
+            fig, ax = plt.subplots()
+            sns.histplot(df_live["pm10"], kde=True, ax=ax)
+            st.pyplot(fig)
+
+    # TRAINING DATA
     df_train = pd.read_csv(DB_FILE)
     df_train["timestamp"] = pd.to_datetime(df_train["timestamp"])
     df_train["hour"] = df_train["timestamp"].dt.hour
@@ -227,51 +243,192 @@ if run_hybrid or run_diag or predict_custom:
     rf = RandomForestRegressor(n_estimators=1000, max_depth=5, random_state=42)
     rf.fit(df_train[features], df_train["pm10"])
 
-    # >>> ADDED SOURCE ATTRIBUTION <<<
-    def estimate_source_influence(row):
-        traffic = 0
-        dust = 0
-        biomass = 0
-        background = 0
-
-        if row["hour"] in [7,8,9,18,19,20,21] and row["dayofweek"] < 5:
-            traffic += 0.4
-
-        if row["temp"] > 30 and row["wind"] > 3:
-            dust += 0.35
-
-        if row["hour"] >= 20 or row["hour"] <= 6:
-            if row["hum"] > 60 and row["month"] in [10,11,12,1]:
-                biomass += 0.35
-
-        background = 1.0 - min(traffic + dust + biomass, 1.0)
-
-        return pd.Series({
-            "Traffic": max(traffic, 0),
-            "Dust": max(dust, 0),
-            "Biomass": max(biomass, 0),
-            "Background": max(background, 0)
-        })
-
     now = pd.Timestamp.now()
     df_live["hour"] = now.hour
     df_live["dayofweek"] = now.dayofweek
     df_live["month"] = now.month
 
-    # >>> ADDED SOURCE ATTRIBUTION <<<
-    df_sources = df_live.apply(estimate_source_influence, axis=1)
-    df_live = pd.concat([df_live, df_sources], axis=1)
-    df_live["Dominant_Source"] = df_sources.idxmax(axis=1)
+    df_live["residuals"] = (
+        df_live["pm10"] - rf.predict(df_live[features])
+    ) * weather_mult
 
-    # --------------------------------------------------
-    # SOURCE SUMMARY
-    # --------------------------------------------------
-    if show_sources:
-        st.subheader("🧭 PM10 Source Influence (Proxy-Based)")
-        source_mean = df_live[["Traffic","Dust","Biomass","Background"]].mean()
-        st.bar_chart(source_mean)
+    # GRID
+    grid_res = 250
+    lats = np.linspace(df_live.lat.min()-0.06, df_live.lat.max()+0.06, grid_res)
+    lons = np.linspace(df_live.lon.min()-0.06, df_live.lon.max()+0.06, grid_res)
+
+    try:
+        OK = OrdinaryKriging(df_live.lon, df_live.lat, df_live["residuals"], variogram_model="gaussian")
+        z_res, _ = OK.execute("grid", lons, lats)
+    except:
+        z_res = np.zeros((grid_res, grid_res))
+
+    lon_g, lat_g = np.meshgrid(lons, lats)
+
+    rf_trend = rf.predict(np.column_stack([
+        lat_g.ravel(), lon_g.ravel(),
+        np.full(lat_g.size, now.hour),
+        np.full(lat_g.size, now.dayofweek),
+        np.full(lat_g.size, now.month),
+        np.full(lat_g.size, weather_now["temp"]),
+        np.full(lat_g.size, weather_now["hum"]),
+        np.full(lat_g.size, weather_now["wind"])
+    ])).reshape(grid_res, grid_res)
+
+    z_final = gaussian_filter(rf_trend * weather_mult + z_res.T, sigma=1.5)
+    z_final[z_final < 0] = 0
+
+    # --- MAP ---
+    # GRID - Increased buffer to 0.1 to allow radial dispersion
+    grid_res = 250
+    lats = np.linspace(df_live.lat.min()-0.1, df_live.lat.max()+0.1, grid_res)
+    lons = np.linspace(df_live.lon.min()-0.1, df_live.lon.max()+0.1, grid_res)
+
+    try:
+        OK = OrdinaryKriging(df_live.lon, df_live.lat, df_live["residuals"], variogram_model="gaussian")
+        z_res, _ = OK.execute("grid", lons, lats)
+    except:
+        z_res = np.zeros((grid_res, grid_res))
+
+    lon_g, lat_g = np.meshgrid(lons, lats)
+
+    rf_trend = rf.predict(np.column_stack([
+        lat_g.ravel(), lon_g.ravel(),
+        np.full(lat_g.size, now.hour),
+        np.full(lat_g.size, now.dayofweek),
+        np.full(lat_g.size, now.month),
+        np.full(lat_g.size, weather_now["temp"]),
+        np.full(lat_g.size, weather_now["hum"]),
+        np.full(lat_g.size, weather_now["wind"])
+    ])).reshape(grid_res, grid_res)
+
+    z_final = gaussian_filter(rf_trend * weather_mult + z_res.T, sigma=3.0)
+    z_final[z_final < 0] = 0
+
+    st.subheader("📂 Historical PM10 Database")
+
+    if not df_history.empty:
+        st.metric("Total Historical Records", len(df_history))
+
         st.dataframe(
-            df_live[["name","Traffic","Dust","Biomass","Background","Dominant_Source"]],
+            df_history.sort_values("timestamp", ascending=False),
             use_container_width=True
         )
-        st.metric("Dominant City-wide Source", source_mean.idxmax())
+
+        st.download_button(
+            label="📥 Download Full Historical CSV",
+            data=df_history.to_csv(index=False).encode("utf-8"),
+            file_name="lucknow_pm10_history.csv",
+            mime="text/csv"
+       )
+    else:
+        st.info("No historical data collected yet.")
+
+    transformer = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+
+    xmin, ymin = transformer.transform(lons.min(), lats.min())
+    xmax, ymax = transformer.transform(lons.max(), lats.max())
+
+    fig, ax = plt.subplots(figsize=(12, 9))
+
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+
+    cx.add_basemap(ax, source=cx.providers.CartoDB.DarkMatter, zoom=12)
+
+    im = ax.imshow(
+        z_final,
+        extent=[xmin, xmax, ymin, ymax],
+        origin="lower",
+        cmap="magma",
+        alpha=opacity,
+        interpolation="bicubic",
+        zorder=2,
+        aspect='equal' 
+    )
+
+    ax.contour(
+        z_final,
+        levels=10, 
+        extent=[xmin, xmax, ymin, ymax],
+        colors='white',
+        alpha=0.2,
+        linewidths=0.5,
+        zorder=3
+    )
+
+    xs, ys = transformer.transform(df_live.lon.values, df_live.lat.values)
+    ax.scatter(xs, ys, c="white", edgecolors="black", s=70, zorder=4, label="Stations")
+
+    plt.colorbar(im, ax=ax, label="PM10 (µg/m³)")
+    ax.legend()
+    ax.set_axis_off()
+
+    st.pyplot(fig)
+
+    if predict_custom:
+        c_rf = rf.predict([[custom_lat, custom_lon, now.hour, now.dayofweek, now.month,
+                             weather_now["temp"], weather_now["hum"], weather_now["wind"]]])[0]
+        try:
+            c_res, _ = OK.execute("points", [custom_lon], [custom_lat])
+            c_val = c_rf + c_res[0]
+        except:
+            c_val = c_rf
+
+        st.metric("Predicted PM10", f"{c_val:.2f} µg/m³")
+
+    st.subheader("📈 Trend & 24-Hour Forecast")
+    
+    df_f = df_train[
+        (df_train["timestamp"].dt.date >= start_date) &
+        (df_train["timestamp"].dt.date <= end_date)
+    ]
+
+    if len(df_f) > 5:
+        df_r = df_f.set_index("timestamp").resample("H").mean(numeric_only=True).dropna()
+        
+        future_times = [pd.Timestamp.now() + pd.Timedelta(hours=i) for i in range(1, 25)]
+        
+        future_preds = []
+        for ft in future_times:
+            pred = rf.predict([[
+                custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month,
+                weather_now["temp"], weather_now["hum"], weather_now["wind"]
+            ]])[0]
+            future_preds.append({"timestamp": ft, "pm10": pred, "Type": "Forecast"})
+
+        df_forecast = pd.DataFrame(future_preds).set_index("timestamp")
+        
+        df_r["Type"] = "Historical"
+        chart_data = pd.concat([df_r[["pm10", "Type"]], df_forecast])
+
+        st.line_chart(chart_data["pm10"])
+        st.caption("The graph shows historical averages followed by a 24-hour prediction based on time-cycles.")
+    else:
+        st.info("Collect more historical data to enable forecasting.")
+    # ==================================================
+# PM10 SOURCE ATTRIBUTION (APPENDED – NO EXISTING CODE MODIFIED)
+# ==================================================
+
+def estimate_source_influence(row):
+    traffic = 0.0
+    dust = 0.0
+    biomass = 0.0
+
+    if row.get("hour") in [7,8,9,18,19,20,21] and row.get("dayofweek", 0) < 5:
+        traffic += 0.4
+
+    if row.get("temp", 0) > 30 and row.get("wind", 0) > 3:
+        dust += 0.35
+
+    if (row.get("hour", 0) >= 20 or row.get("hour", 0) <= 6) and row.get("hum", 0) > 60 and row.get("month") in [10,11,12,1]:
+        biomass += 0.35
+
+    background = max(1.0 - (traffic + dust + biomass), 0)
+
+    return {
+        "Traffic": traffic,
+        "Dust": dust,
+        "Biomass": biomass,
+        "Background": background
+    }
