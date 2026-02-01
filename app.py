@@ -468,6 +468,34 @@ try:
 except:
     pass
 # ==================================================
+# FINAL SOURCE UI (OVERRIDE – SAFE)
+# ==================================================
+
+try:
+    if show_source_ui and "df_live" in globals():
+
+        source_rows = df_live.apply(
+            lambda r: pd.Series(estimate_source_influence_final(r)),
+            axis=1
+        )
+
+        df_source_view = pd.concat([df_live, source_rows], axis=1)
+        df_source_view["Dominant_Source"] = source_rows.idxmax(axis=1)
+
+        st.subheader("🧭 PM10 Source Influence (Proxy-Based)")
+
+        st.bar_chart(source_rows.mean())
+
+        st.dataframe(
+            df_source_view[
+                ["name","Traffic","Dust","Biomass","Background","Dominant_Source"]
+            ],
+            use_container_width=True
+        )
+
+except Exception as e:
+    st.info("Source attribution active but awaiting valid runtime context.")
+# ==================================================
 # APPENDED SOURCE ATTRIBUTION DISPLAY (SAFE)
 # ==================================================
 
@@ -527,3 +555,40 @@ def safe_row(row):
         r["wind"] = weather_now["wind"]
 
     return r
+# ==================================================
+# FINAL OVERRIDE: SOURCE ATTRIBUTION (ROBUST)
+# ==================================================
+
+def estimate_source_influence_final(row):
+    hour = now.hour
+    dayofweek = now.dayofweek
+    month = now.month
+
+    temp = weather_now["temp"]
+    hum = weather_now["hum"]
+    wind = weather_now["wind"]
+
+    traffic = 0.0
+    dust = 0.0
+    biomass = 0.0
+
+    # Traffic
+    if hour in [7,8,9,18,19,20,21] and dayofweek < 5:
+        traffic = 0.4
+
+    # Dust
+    if temp > 30 and wind > 3:
+        dust = 0.35
+
+    # Biomass
+    if (hour >= 20 or hour <= 6) and hum > 60 and month in [10,11,12,1]:
+        biomass = 0.35
+
+    background = max(1.0 - (traffic + dust + biomass), 0)
+
+    return {
+        "Traffic": traffic,
+        "Dust": dust,
+        "Biomass": biomass,
+        "Background": background
+    }
