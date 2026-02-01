@@ -432,3 +432,44 @@ def estimate_source_influence(row):
         "Biomass": biomass,
         "Background": background
     }
+# ==================================================
+# APPENDED UI CONTROL (SOURCE ATTRIBUTION TOGGLE)
+# ==================================================
+
+try:
+    show_source_ui = st.sidebar.checkbox("🧭 Show PM10 Source Influence")
+except:
+    show_source_ui = False
+# ==================================================
+# APPENDED SOURCE ATTRIBUTION DISPLAY (SAFE)
+# ==================================================
+
+try:
+    if show_source_ui and "df_live" in globals():
+
+        source_rows = df_live.apply(
+            lambda r: pd.Series(estimate_source_influence(r)),
+            axis=1
+        )
+
+        df_source_view = pd.concat([df_live, source_rows], axis=1)
+        df_source_view["Dominant_Source"] = source_rows.idxmax(axis=1)
+
+        st.subheader("🧭 PM10 Source Influence (Proxy-Based)")
+
+        st.caption(
+            "Source influence is estimated using time-of-day, "
+            "meteorology, and seasonal proxies (not chemical speciation)."
+        )
+
+        st.bar_chart(source_rows.mean())
+
+        st.dataframe(
+            df_source_view[
+                ["name", "Traffic", "Dust", "Biomass", "Background", "Dominant_Source"]
+            ],
+            use_container_width=True
+        )
+
+except:
+    pass
