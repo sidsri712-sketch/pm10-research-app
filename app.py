@@ -420,3 +420,27 @@ if run_hybrid or run_diag or predict_custom:
         st.caption("The graph shows historical averages followed by a 24-hour prediction based on time-cycles.")
     else:
         st.info("Collect more historical data to enable forecasting.")
+    # --------------------------------------------------
+# ACCURACY TRACKER (SIDEBAR ADDITION)
+# --------------------------------------------------
+st.sidebar.markdown("---")
+st.sidebar.subheader("🧠 Intelligence Monitor")
+
+if not df_history.empty and 'pm10' in df_history.columns:
+    # Calculate data maturity
+    data_richness = len(df_history)
+    progress_val = min(data_richness / 1000, 1.0)
+    st.sidebar.progress(progress_val, text=f"Data Maturity: {data_richness}/1000")
+    
+    if data_richness > 50:
+        st.sidebar.success("✅ Model is identifying seasonal cycles.")
+    elif data_richness > 10:
+        st.sidebar.info("📈 Model is gathering local patterns...")
+    else:
+        st.sidebar.warning("👶 Model 'Brain' is in infant stage.")
+
+    # Visualizing the "Growth" - Simple Trend of captured data points
+    if len(df_history) > 5:
+        st.sidebar.caption("Data Accumulation Trend")
+        growth_data = df_history.groupby(pd.to_datetime(df_history['timestamp']).dt.date).size()
+        st.sidebar.line_chart(growth_data)
