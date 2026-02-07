@@ -27,7 +27,7 @@ def push_csv_to_github():
         os.system("git config --global user.name 'PM10 Auto Bot'")
         os.system("git add lucknow_pm10_history.csv")
         os.system('git commit -m "Auto update pm10 data"')
-        os.system("git push https://%s@github.com/sidsri712-sketch/pm10-research-app.git" % GIT_TOKEN)"
+        os.system("git push https://%s@github.com/sidsri712-sketch/pm10-research-app.git" % GIT_TOKEN)
     except:
         pass
 # --------------------------------------------------
