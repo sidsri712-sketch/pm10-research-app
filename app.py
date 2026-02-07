@@ -17,7 +17,18 @@ import datetime
 import time
 import io
 import os
-
+# --------------------------------------------------
+# GITHUB AUTO BACKUP FUNCTION (DO NOT CHANGE)
+# --------------------------------------------------
+def push_csv_to_github():
+    try:
+        os.system("git config --global user.email 'auto@pm10bot.com'")
+        os.system("git config --global user.name 'PM10 Auto Bot'")
+        os.system("git add lucknow_pm10_history.csv")
+        os.system('git commit -m "Auto update pm10 data"')
+        os.system("git push")
+    except:
+        pass
 # --------------------------------------------------
 # CONFIGURATION
 # --------------------------------------------------
@@ -110,6 +121,7 @@ def fetch_pm10_data():
                     inplace=True
                 )
                 df_all.to_csv(DB_FILE, index=False)
+                push_csv_to_github()
             else:
                 df_live.to_csv(DB_FILE, index=False)
 
