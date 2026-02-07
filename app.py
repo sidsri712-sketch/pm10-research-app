@@ -17,6 +17,7 @@ import datetime
 import time
 import io
 import os
+GIT_TOKEN = "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"
 # --------------------------------------------------
 # GITHUB AUTO BACKUP FUNCTION (DO NOT CHANGE)
 # --------------------------------------------------
@@ -26,7 +27,7 @@ def push_csv_to_github():
         os.system("git config --global user.name 'PM10 Auto Bot'")
         os.system("git add lucknow_pm10_history.csv")
         os.system('git commit -m "Auto update pm10 data"')
-        os.system("git push")
+        os.system("git push https://%s@github.com/sidsri712-sketch/pm10-research-app.git" % GIT_TOKEN)"
     except:
         pass
 # --------------------------------------------------
