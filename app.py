@@ -124,7 +124,20 @@ def fetch_pm10_data():
                 df_all.to_csv(DB_FILE, index=False)
                 push_csv_to_github()
             else:
-                df_live.to_csv(DB_FILE, index=False)
+                import json
+
+                # ---- Google Sheets API endpoint from Apps Script ----
+                GOOGLE_SHEET_URL = "https://script.google.com/macros/s/XXXXXXXXXXXXXXXXXXXXXX/exec"
+
+                try:
+                    # Convert latest batch to list of dicts
+                    payload = df_live.to_dict(orient="records")
+
+                    # Send POST
+                    r = requests.post(GOOGLE_SHEET_URL, data=json.dumps(payload))
+                    st.write("✅ Data synced to Google Sheets:", r.text)
+                except Exception as e:
+                    st.error("❌ Failed to sync with Google Sheets: %s" % e)
 
             return df_live.groupby(["lat", "lon"]).agg({
                 "pm10": "mean",
