@@ -121,7 +121,10 @@ def fetch_pm10_data():
             GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbyoy_PD319OgRj9z3j3WR2nrL_FWzLXU15o_a9Edc4ZzEmipvYtBaeCDr1xGdno_O5n/exec"
 
             try:
-                payload = df_live.to_dict(orient="records")
+                payload = df_live.copy()
+                payload["timestamp"] = payload["timestamp"].astype(str)
+                payload = payload.to_dict(orient="records")
+                
                 r = requests.post(GOOGLE_SHEET_URL, data=json.dumps(payload))
                 st.write("✅ Data synced to Google Sheets:", r.text)
             except Exception as e:
