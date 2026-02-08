@@ -114,38 +114,38 @@ def fetch_pm10_data():
         df_live = pd.DataFrame(records)
 
         if not df_live.empty:
-            if os.path.exists(DB_FILE):
-                df_hist = pd.read_csv(DB_FILE)
-                df_all = pd.concat([df_hist, df_live], ignore_index=True)
-                df_all.drop_duplicates(
-                    subset=["lat", "lon", "pm10", "timestamp"],
-                    inplace=True
-                )
-                df_all.to_csv(DB_FILE, index=False)
-                push_csv_to_github()
-            else:
-                import json
 
-                # ---- Google Sheets API endpoint from Apps Script ----
-                GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbyoy_PD319OgRj9z3j3WR2nrL_FWzLXU15o_a9Edc4ZzEmipvYtBaeCDr1xGdno_O5n/exec"
+    # --- Always try Google Sheets sync first ---
+    import json
 
-                try:
-                    # Convert latest batch to list of dicts
-                    payload = df_live.to_dict(orient="records")
+    GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbyoy_PD319OgRj9z3j3WR2nrL_FWzLXU15o_a9Edc4ZzEmipvYtBaeCDr1xGdno_O5n/exec"
 
-                    # Send POST
-                    r = requests.post(GOOGLE_SHEET_URL, data=json.dumps(payload))
-                    st.write("✅ Data synced to Google Sheets:", r.text)
-                except Exception as e:
-                    st.error("❌ Failed to sync with Google Sheets: %s" % e)
+    try:
+        payload = df_live.to_dict(orient="records")
+        r = requests.post(GOOGLE_SHEET_URL, data=json.dumps(payload))
+        st.write("✅ Data synced to Google Sheets:", r.text)
+    except Exception as e:
+        st.error("❌ Failed to sync with Google Sheets: %s" % e)
 
-            return df_live.groupby(["lat", "lon"]).agg({
-                "pm10": "mean",
-                "name": "first",
-                "temp": "first",
-                "hum": "first",
-                "wind": "first"
-            }).reset_index()
+    # --- Keep local CSV as optional backup ---
+    if os.path.exists(DB_FILE):
+        df_hist = pd.read_csv(DB_FILE)
+        df_all = pd.concat([df_hist, df_live], ignore_index=True)
+        df_all.drop_duplicates(
+            subset=["lat", "lon", "pm10", "timestamp"],
+            inplace=True
+        )
+        df_all.to_csv(DB_FILE, index=False)
+    else:
+        df_live.to_csv(DB_FILE, index=False)
+
+    return df_live.groupby(["lat", "lon"]).agg({
+        "pm10": "mean",
+        "name": "first",
+        "temp": "first",
+        "hum": "first",
+        "wind": "first"
+    }).reset_index()
 
         return pd.DataFrame()
 
