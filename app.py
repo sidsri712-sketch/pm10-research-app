@@ -127,7 +127,7 @@ def fetch_pm10_data():
                 import json
 
                 # ---- Google Sheets API endpoint from Apps Script ----
-                GOOGLE_SHEET_URL = "https://script.google.com/macros/s/XXXXXXXXXXXXXXXXXXXXXX/exec"
+                GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbyoy_PD319OgRj9z3j3WR2nrL_FWzLXU15o_a9Edc4ZzEmipvYtBaeCDr1xGdno_O5n/exec"
 
                 try:
                     # Convert latest batch to list of dicts
