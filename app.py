@@ -17,19 +17,22 @@ import datetime
 import time
 import io
 import os
-GIT_TOKEN = "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"
 # --------------------------------------------------
-# GITHUB AUTO BACKUP FUNCTION (DO NOT CHANGE)
+# PERMANENT DATA STORAGE (GOOGLE SHEETS)
 # --------------------------------------------------
-def push_csv_to_github():
+GSHEET_READ_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQO7corvhjivltUU1Y1aE4lDH1BmKDSF1O2uDSmSfw6HyNr5RuYz4qXYGCCsNDt3OUqqA7sFHaLqqiO/pub?output=csv"
+GOOGLE_SHEET_SEND_URL = "https://script.google.com/macros/s/AKfycbyoy_PD319OgRj9z3j3WR2nrL_FWzLXU15o_a9Edc4ZzEmipvYtBaeCDr1xGdno_O5n/exec"
+
+@st.cache_data(ttl=600)
+def load_historical_data():
+    """Reads historical records directly from Google Sheets."""
     try:
-        os.system("git config --global user.email 'auto@pm10bot.com'")
-        os.system("git config --global user.name 'PM10 Auto Bot'")
-        os.system("git add lucknow_pm10_history.csv")
-        os.system('git commit -m "Auto update pm10 data"')
-        os.system("git push https://%s@github.com/sidsri712-sketch/pm10-research-app.git" % GIT_TOKEN)
-    except:
-        pass
+        df = pd.read_csv(GSHEET_READ_URL)
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
+        return df
+    except Exception as e:
+        st.error(f"Connecting to Google Sheets... {e}")
+        return pd.DataFrame()
 # --------------------------------------------------
 # CONFIGURATION
 # --------------------------------------------------
@@ -95,18 +98,13 @@ def fetch_pm10_data():
         r = requests.get(url).json()
         if r.get("status") == "ok":
             for s in r["data"]:
-                d = requests.get(
-                    f"https://api.waqi.info/feed/@{s['uid']}/?token={TOKEN}"
-                ).json()
+                d = requests.get(f"https://api.waqi.info/feed/@{s['uid']}/?token={TOKEN}").json()
                 if d.get("status") == "ok" and "pm10" in d["data"].get("iaqi", {}):
                     records.append({
-                        "lat": s["lat"],
-                        "lon": s["lon"],
+                        "lat": s["lat"], "lon": s["lon"],
                         "pm10": d["data"]["iaqi"]["pm10"]["v"],
                         "name": d["data"]["city"]["name"],
-                        "temp": weather["temp"],
-                        "hum": weather["hum"],
-                        "wind": weather["wind"],
+                        "temp": weather["temp"], "hum": weather["hum"], "wind": weather["wind"],
                         "timestamp": pd.Timestamp.now()
                     })
                 time.sleep(0.1)
@@ -114,46 +112,22 @@ def fetch_pm10_data():
         df_live = pd.DataFrame(records)
 
         if not df_live.empty:
-
-            # ===== Google Sheets Sync (Runs Every Time) =====
+            # Sync to Google Sheets
             import json
-
-            GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbyoy_PD319OgRj9z3j3WR2nrL_FWzLXU15o_a9Edc4ZzEmipvYtBaeCDr1xGdno_O5n/exec"
-
             try:
                 payload = df_live.copy()
                 payload["timestamp"] = payload["timestamp"].astype(str)
-                payload = payload.to_dict(orient="records")
-                
-                r = requests.post(GOOGLE_SHEET_URL, data=json.dumps(payload))
-                st.write("✅ Data synced to Google Sheets:", r.text)
-            except Exception as e:
-                st.error("❌ Failed to sync with Google Sheets: %s" % e)
-
-            # ===== Local CSV as Optional Backup =====
-            if os.path.exists(DB_FILE):
-                df_hist = pd.read_csv(DB_FILE)
-                df_all = pd.concat([df_hist, df_live], ignore_index=True)
-                df_all.drop_duplicates(
-                    subset=["lat", "lon", "pm10", "timestamp"],
-                    inplace=True
-                )
-                df_all.to_csv(DB_FILE, index=False)
-            else:
-                df_live.to_csv(DB_FILE, index=False)
-
+                payload_dict = payload.to_dict(orient="records")
+                requests.post(GOOGLE_SHEET_SEND_URL, data=json.dumps(payload_dict))
+            except:
+                pass 
+            
             return df_live.groupby(["lat", "lon"]).agg({
-                "pm10": "mean",
-                "name": "first",
-                "temp": "first",
-                "hum": "first",
-                "wind": "first"
+                "pm10": "mean", "name": "first", "temp": "first", "hum": "first", "wind": "first"
             }).reset_index()
 
         return pd.DataFrame()
-
     except Exception as e:
-        st.error(f"API error: {e}")
         return pd.DataFrame()
 
 # --------------------------------------------------
@@ -204,13 +178,15 @@ st.sidebar.caption(f"Last refresh: {time.strftime('%H:%M:%S')}")
 # -------------------------------
 # LOAD FULL HISTORICAL DATA
 # -------------------------------
-if os.path.exists(DB_FILE):
-    df_history = pd.read_csv(DB_FILE)
-else:
-    df_history = pd.DataFrame()
+# --------------------------------------------------
+# SIDEBAR DATA LOADING
+# --------------------------------------------------
+df_history = load_historical_data()
+
 if not df_history.empty:
-    st.sidebar.metric("Historical Samples", len(df_history))
-st.sidebar.header("🛠 Controls")
+    st.sidebar.metric("Historical Samples (Cloud)", len(df_history))
+else:
+    st.sidebar.warning("Syncing Cloud Database...")
 
 # --- LIVE SENSOR LINK (New Sidebar Feature) ---
 st.sidebar.subheader("📡 Live Sensor Link")
