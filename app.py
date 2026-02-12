@@ -482,9 +482,7 @@ if run_hybrid or run_diag or predict_custom:
 
     df_forecast = pd.DataFrame(future_results)
     st.line_chart(df_forecast.set_index("timestamp")["pm10"])
-    st.caption("The graph predicts Lucknow's PM10 levels for the next 24 hours using the NSS-Net SRI loop.")
-    else:
-        st.info("Collect more historical data to enable forecasting.")
+    
     # --------------------------------------------------
 # ACCURACY TRACKER (SIDEBAR ADDITION)
 # --------------------------------------------------
