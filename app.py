@@ -409,41 +409,43 @@ if run_hybrid or run_diag or predict_custom:
     if len(df_f) > 5:
         # 1. Historical Trend
         df_r = df_f.set_index("timestamp").resample("H").mean(numeric_only=True).dropna()
-        
+        # Generate Future Predictions
         weather_df = fetch_weather()
+        future_preds = []
 
-future_preds = []
+        for ft in future_times:
+            weather_row = weather_df[weather_df["timestamp"] == ft.floor("H")]
 
-for ft in future_times:
-    weather_row = weather_df[weather_df["timestamp"] == ft.floor("H")]
-
-    if not weather_row.empty:
-        temp = weather_row["temp"].values[0]
-        hum = weather_row["hum"].values[0]
-        wind = weather_row["wind"].values[0]
-    else:
+            if not weather_row.empty:
+                temp = weather_row["temp"].values[0]
+                hum = weather_row["hum"].values[0]
+                wind = weather_row["wind"].values[0]
+            else:
         # fallback if timestamp mismatch
-        temp = weather_df["temp"].iloc[0]
-        hum = weather_df["hum"].iloc[0]
-        wind = weather_df["wind"].iloc[0]
+                temp = weather_df["temp"].iloc[0]
+                hum = weather_df["hum"].iloc[0]
+                wind = weather_df["wind"].iloc[0]
 
-    pred = rf.predict(np.array([[
-        custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month,
-        temp, hum, wind
-    ]]))[0]
+            pred = rf.predict(np.array([[
+                custom_lat, custom_lon,
+                ft.hour, ft.dayofweek, ft.month,
+                temp, hum, wind
+            ]]))[0]
 
-    future_preds.append({
-        "timestamp": ft,
-        "pm10": pred,
-        "Type": "Forecast"
-    })
-    df_forecast = pd.DataFrame(future_preds).set_index("timestamp")
-        
-        # Combine Historical and Forecast for the chart
+            future_preds.append({
+                "timestamp": ft,
+                "pm10": pred,
+                "Type": "Forecast"
+            })
+
+# ⬇️ OUTSIDE THE LOOP
+        df_forecast = pd.DataFrame(future_preds).set_index("timestamp")
+
+# Combine Historical and Forecast for chart
         df_r["Type"] = "Historical"
         chart_data = pd.concat([df_r[["pm10", "Type"]], df_forecast])
 
-        # Display Chart
+# Display Chart
         st.line_chart(chart_data["pm10"])
         st.caption("The graph shows historical averages followed by a 24-hour prediction based on time-cycles.")
     else:
