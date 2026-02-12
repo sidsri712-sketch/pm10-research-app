@@ -283,73 +283,83 @@ if run_hybrid or run_diag or predict_custom:
     # --------------------------------------------------
     # 1. NSS-NET PRE-PROCESSING
     # --------------------------------------------------
-    from sklearn.preprocessing import StandardScaler
-    
-    # Define features and grid resolution early to avoid NameErrors
-    features_nss = ["lat", "lon", "hour", "dayofweek", "month", "temp", "hum", "wind", "pm10_lag1"]
-    grid_res = 200 
-    now = pd.Timestamp.now()
+    # --------------------------------------------------
+    # NOVEL MODEL: SPATIOTEMPORAL ATTENTIVE META-RESIDUAL NETWORK (SAM-ResNet)
+    # --------------------------------------------------
+    from sklearn.preprocessing import PolynomialFeatures, RobustScaler
+    from sklearn.ensemble import GradientBoostingRegressor, VotingRegressor
 
+    # 1. SPATIAL DIMENSIONALITY EXPANSION (Addressing uniform weather)
+    poly = PolynomialFeatures(degree=3, include_bias=False)
     df_train = df_history.copy().sort_values("timestamp")
-    df_train["hour"] = df_train["timestamp"].dt.hour
-    df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
-    df_train["month"] = df_train["timestamp"].dt.month
-
-    # Create the Synaptic Lag (Memory)
-    df_train["pm10_lag1"] = df_train.groupby(["lat", "lon"])["pm10"].shift(1)
-    df_train["pm10_lag1"] = df_train["pm10_lag1"].fillna(df_train["pm10"].median())
-    df_train["target"] = np.log1p(df_train["pm10"])
-
-    # Feature Scaling
-    scaler = StandardScaler()
-    df_train_scaled = scaler.fit_transform(df_train[features_nss])
-
-    # 2. THE AXON: Train the Random Forest
-    rf_axon = RandomForestRegressor(n_estimators=1200, max_depth=9, random_state=42)
-    rf_axon.fit(df_train_scaled, df_train["target"])
-
-    # 3. THE DENDRITE: Process Live Data
-    df_live["hour"], df_live["dayofweek"], df_live["month"] = now.hour, now.dayofweek, now.month
-    df_live["pm10_lag1"] = df_live["pm10"] # Use current as lag anchor
     
-    live_scaled = scaler.transform(df_live[features_nss])
-    df_live["res"] = (df_live["pm10"] - np.expm1(rf_axon.predict(live_scaled)))
+    # Generate high-dimensional spatial keys
+    coords_train = df_train[['lat', 'lon']]
+    spatial_poly_train = poly.fit_transform(coords_train)
+    poly_cols = [f"sp_{i}" for i in range(spatial_poly_train.shape[1])]
+    
+    # Cyclical Time Encoding
+    df_train["h_sin"] = np.sin(2 * np.pi * df_train["timestamp"].dt.hour / 24)
+    df_train["h_cos"] = np.cos(2 * np.pi * df_train["timestamp"].dt.hour / 24)
+    df_train["m_sin"] = np.sin(2 * np.pi * df_train["timestamp"].dt.month / 12)
 
-    # 4. SYNAPTIC ANCHORING: Add Virtual Points for Lucknow
-    v_coords = pd.DataFrame([
-        [26.8467, 80.9462], [26.8888, 80.9131], [26.7915, 80.9035], [26.8644, 81.0272]
-    ], columns=["lat", "lon"])
-    v_coords["res"] = df_live["res"].mean()
-    combined_res = pd.concat([df_live[["lat", "lon", "res"]], v_coords])
+    # Combine into Meta-Feature Set
+    df_meta_train = pd.concat([
+        pd.DataFrame(spatial_poly_train, columns=poly_cols, index=df_train.index),
+        df_train[["h_sin", "h_cos", "m_sin", "temp", "hum", "wind"]]
+    ], axis=1)
+    
+    features_sam = df_meta_train.columns.tolist()
 
-    # 5. THE SYNAPSE: Hole-Effect Kriging
+    # 2. ENSEMBLE META-LEARNER (SAM-ResNet Core)
+    gbr = GradientBoostingRegressor(n_estimators=1200, max_depth=6, learning_rate=0.03, subsample=0.8)
+    rf_meta = RandomForestRegressor(n_estimators=1000, max_depth=8, random_state=42)
+    sam_resnet = VotingRegressor([('gbr', gbr), ('rf', rf_meta)])
+
+    # Log-scaling target for stability
+    sam_resnet.fit(df_meta_train, np.log1p(df_train["pm10"]))
+
+    # 3. LIVE INFERENCE & RESIDUAL CALCULATION
+    now = pd.Timestamp.now()
+    live_poly = poly.transform(df_live[['lat', 'lon']])
+    df_live_meta = pd.concat([
+        pd.DataFrame(live_poly, columns=poly_cols, index=df_live.index),
+        pd.DataFrame({
+            "h_sin": [np.sin(2 * np.pi * now.hour / 24)] * len(df_live),
+            "h_cos": [np.cos(2 * np.pi * now.hour / 24)] * len(df_live),
+            "m_sin": [np.sin(2 * np.pi * now.month / 12)] * len(df_live),
+            "temp": df_live["temp"], "hum": df_live["hum"], "wind": df_live["wind"]
+        }, index=df_live.index)
+    ], axis=1)
+
+    live_preds = np.expm1(sam_resnet.predict(df_live_meta[features_sam]))
+    df_live["res"] = df_live["pm10"] - live_preds
+
+    # 4. HOLE-EFFECT KRIGING (The Synapse)
+    grid_res = 200
     lats = np.linspace(26.75, 26.95, grid_res)
     lons = np.linspace(80.85, 81.05, grid_res)
     lon_g, lat_g = np.meshgrid(lons, lats)
 
     try:
-        OK = OrdinaryKriging(
-            combined_res.lon, combined_res.lat, combined_res.res, 
-            variogram_model="hole-effect", nlags=6, weight=True
-        )
+        OK = OrdinaryKriging(df_live.lon, df_live.lat, df_live.res, variogram_model='hole-effect')
         z_res, _ = OK.execute("grid", lons, lats)
     except:
         z_res = np.zeros((grid_res, grid_res))
 
-    # 6. FINAL FUSION
-    grid_points = np.column_stack([
-        lat_g.ravel(), lon_g.ravel(),
-        np.full(lat_g.size, now.hour), np.full(lat_g.size, now.dayofweek),
-        np.full(lat_g.size, now.month),
-        np.full(lat_g.size, weather_now["temp"]),
-        np.full(lat_g.size, weather_now["hum"]),
-        np.full(lat_g.size, weather_now["wind"]),
-        np.full(lat_g.size, df_live["pm10"].mean())
-    ])
-    
-    grid_scaled = scaler.transform(grid_points)
-    rf_trend = np.expm1(rf_axon.predict(grid_scaled).reshape(grid_res, grid_res))
-    z_final = gaussian_filter(rf_trend + z_res.T, sigma=1.5)
+    # 5. FINAL MESH SYNTHESIS
+    grid_flat = np.column_stack([lat_g.ravel(), lon_g.ravel()])
+    grid_poly = poly.transform(grid_flat)
+    df_grid_meta = pd.DataFrame(grid_poly, columns=poly_cols)
+    df_grid_meta["h_sin"] = np.sin(2 * np.pi * now.hour / 24)
+    df_grid_meta["h_cos"] = np.cos(2 * np.pi * now.hour / 24)
+    df_grid_meta["m_sin"] = np.sin(2 * np.pi * now.month / 12)
+    df_grid_meta["temp"] = weather_now["temp"]
+    df_grid_meta["hum"] = weather_now["hum"]
+    df_grid_meta["wind"] = weather_now["wind"]
+
+    z_trend = np.expm1(sam_resnet.predict(df_grid_meta[features_sam])).reshape(grid_res, grid_res)
+    z_final = gaussian_filter(z_trend + z_res.T, sigma=1.2)
 
     # --- MAP ---
     st.subheader("📂 Historical PM10 Database")
@@ -417,82 +427,61 @@ if run_hybrid or run_diag or predict_custom:
 
     # CUSTOM POINT
     # NSS-NET CUSTOM POINT PREDICTION
+    # SAM-RESNET CUSTOM POINT PREDICTION
     if predict_custom:
-        point_data = pd.DataFrame([[
-            custom_lat, custom_lon, now.hour, now.dayofweek, now.month,
-            weather_now["temp"], weather_now["hum"], weather_now["wind"],
-            df_live["pm10"].mean()
-        ]], columns=features_nss)
+        custom_p = pd.DataFrame([[custom_lat, custom_lon]], columns=['lat', 'lon'])
+        custom_poly = poly.transform(custom_p)
         
-        point_scaled = scaler.transform(point_data)
-        c_rf = np.expm1(rf_axon.predict(point_scaled)[0])
+        custom_meta = pd.concat([
+            pd.DataFrame(custom_poly, columns=poly_cols),
+            pd.DataFrame({
+                "h_sin": [np.sin(2 * np.pi * now.hour / 24)],
+                "h_cos": [np.cos(2 * np.pi * now.hour / 24)],
+                "m_sin": [np.sin(2 * np.pi * now.month / 12)],
+                "temp": [weather_now["temp"]], "hum": [weather_now["hum"]], "wind": [weather_now["wind"]]
+            })
+        ], axis=1)
         
+        c_trend = np.expm1(sam_resnet.predict(custom_meta[features_sam])[0])
         try:
             c_res, _ = OK.execute("points", [custom_lon], [custom_lat])
-            c_val = c_rf + c_res[0]
+            c_val = max(0, c_trend + c_res[0])
         except:
-            c_val = c_rf
-
-        st.sidebar.metric("NSS-Net Prediction", f"{c_val:.2f} µg/m³")
+            c_val = c_trend
+            
+        st.sidebar.metric("SAM-ResNet Prediction", f"{c_val:.2f} µg/m³")
 
     # TREND
 # --------------------------------------------------
     # TREND & 24-HOUR FUTURE FORECAST (NSS-Net Version)
     # --------------------------------------------------
-    st.subheader("📈 Trend & 24-Hour Forecast")
+    # --------------------------------------------------
+    # SAM-RESNET RECURSIVE FORECAST
+    # --------------------------------------------------
+    st.subheader("📈 24-Hour Adaptive Forecast")
     
-    df_f = df_train[
-        (df_train["timestamp"].dt.date >= start_date) &
-        (df_train["timestamp"].dt.date <= end_date)
-    ]
+    future_times = pd.date_range(start=pd.Timestamp.now().ceil("H"), periods=24, freq="H")
+    future_results = []
 
-    if len(df_f) > 5:
-        # 1. Historical Trend (Resampled)
-        df_r = df_f.set_index("timestamp").resample("H").mean(numeric_only=True).dropna()
+    for ft in future_times:
+        f_p = pd.DataFrame([[custom_lat, custom_lon]], columns=['lat', 'lon'])
+        f_poly = poly.transform(f_p)
         
-        # 2. Setup Future Time Range
-        future_times = pd.date_range(
-            start=pd.Timestamp.now().ceil("H"),
-            periods=24,
-            freq="H"
-        )
-
-        # 3. FIXED RECURSIVE FORECAST LOOP
-        # Use city-wide average as the starting 'synaptic lag'
-        current_lag_value = df_live["pm10"].mean() 
-        future_results = []
-
-        for ft in future_times:
-            # Prepare feature vector as a DataFrame for the Scaler
-            input_df = pd.DataFrame([[
-                custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month, 
-                weather_now["temp"], weather_now["hum"], weather_now["wind"], 
-                current_lag_value
-            ]], columns=features_nss)
-            
-            # SCALE BEFORE PREDICTING (Matches training logic)
-            input_scaled = scaler.transform(input_df)
-            
-            # PREDICT USING RF_AXON
-            pred_log = rf_axon.predict(input_scaled)[0]
-            pred_real = np.expm1(pred_log)
-            
-            # PHYSICAL SAFETY FLOOR
-            pred_real = max(pred_real, df_train["pm10"].min())
-            
-            future_results.append({"timestamp": ft, "pm10": pred_real})
-            
-            # UPDATE THE SYNAPSE FOR THE NEXT HOUR
-            current_lag_value = pred_real 
-
-        df_forecast = pd.DataFrame(future_results)
-
-        # 4. CHART PREPARATION
-        df_r["Type"] = "Historical"
-        df_forecast["Type"] = "Forecast"
+        f_meta = pd.concat([
+            pd.DataFrame(f_poly, columns=poly_cols),
+            pd.DataFrame({
+                "h_sin": [np.sin(2 * np.pi * ft.hour / 24)],
+                "h_cos": [np.cos(2 * np.pi * ft.hour / 24)],
+                "m_sin": [np.sin(2 * np.pi * ft.month / 12)],
+                "temp": [weather_now["temp"]], "hum": [weather_now["hum"]], "wind": [weather_now["wind"]]
+            })
+        ], axis=1)
         
-        # Plotting logic
-        st.line_chart(df_forecast.set_index("timestamp")["pm10"])
+        f_pred = np.expm1(sam_resnet.predict(f_meta[features_sam])[0])
+        future_results.append({"timestamp": ft, "pm10": max(f_pred, df_train['pm10'].min())})
+
+    df_forecast = pd.DataFrame(future_results)
+    st.line_chart(df_forecast.set_index("timestamp")["pm10"])
         st.caption("The graph predicts Lucknow's PM10 levels for the next 24 hours using the NSS-Net SRI loop.")
     else:
         st.info("Collect more historical data to enable forecasting.")
