@@ -267,105 +267,69 @@ if run_hybrid or run_diag or predict_custom:
     # 1. CREATE TIME-LAGS (The 'Memory' of the model)
 # We sort by time and create a 'previous hour' column for each station
     # --- SAFE TRAINING PREPARATION ---
+    # --- [REPLACE STARTING FROM TRAINING BLOCK] ---
+
+# 1. NSS-NET PRE-PROCESSING: Meteorological Distance Scaling
     df_train = df_history.copy().sort_values("timestamp")
-
-# 1. Create the Lag feature
-    df_train["pm10_lag1"] = df_train.groupby(["lat", "lon"])["pm10"].shift(1)
-# Important: Fill NaNs so the model doesn't crash
-    df_train["pm10_lag1"] = df_train["pm10_lag1"].fillna(df_train["pm10"].median())
-
-# 2. Ensure Time features exist
     df_train["hour"] = df_train["timestamp"].dt.hour
     df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
     df_train["month"] = df_train["timestamp"].dt.month
 
-# 3. Log Transformation
+# Generate the Synaptic Lag (Memory)
+    df_train["pm10_lag1"] = df_train.groupby(["lat", "lon"])["pm10"].shift(1)
+    df_train["pm10_lag1"] = df_train["pm10_lag1"].fillna(df_train["pm10"].median())
+
+# NOVEL STEP: Feature Normalization for "Meteorological Distance"
+    from sklearn.preprocessing import StandardScaler
+    scaler = StandardScaler()
+    features_list = ["lat", "lon", "hour", "dayofweek", "month", "temp", "hum", "wind", "pm10_lag1"]
+    df_train_scaled = scaler.fit_transform(df_train[features_list])
+
+# 2. THE AXON: Optimized Random Forest with Log-Target
     df_train["target"] = np.log1p(df_train["pm10"])
+    rf_axon = RandomForestRegressor(n_estimators=1500, max_depth=9, min_samples_leaf=1, random_state=42)
+    rf_axon.fit(df_train_scaled, df_train["target"])
 
-# 4. Define features (Double check these names match your df_train columns exactly)
-    features_with_lag = ["lat", "lon", "hour", "dayofweek", "month", "temp", "hum", "wind", "pm10_lag1"]
-
-# 5. Training
-    rf = RandomForestRegressor(n_estimators=1000, max_depth=7, random_state=42)
-    rf.fit(df_train[features_with_lag], df_train["target"])
-
-    # 3. COMPUTE RESIDUALS WITH BACK-TRANSFORMATION
+# 3. THE DENDRITE: Dynamic Residual Augmentation
     now = pd.Timestamp.now()
     df_live["hour"], df_live["dayofweek"], df_live["month"] = now.hour, now.dayofweek, now.month
-    
-    # Predict in log-space, then transform back to original scale using expm1
-    # --- FIXING THE NAME ERROR ---
-# Ensure df_live has the same 'memory' feature as df_train
-    df_live["pm10_lag1"] = df_live["pm10"] # For live data, we use current pm10 as the baseline lag
+    df_live["pm10_lag1"] = df_live["pm10"] # Anchoring
 
-# Use the updated feature list name
-    log_preds = rf.predict(df_live[features_with_lag]) 
+    live_scaled = scaler.transform(df_live[features_list])
+    df_live["res"] = (df_live["pm10"] - np.expm1(rf_axon.predict(live_scaled)))
 
-# Back-transform from log to real scale
-    df_live["res"] = (df_live["pm10"] - np.expm1(log_preds)) * weather_mult
-    
+# 4. THE SYNAPSE: Error-Weighted Kriging
+# We inject "Virtual Synapses" at key Lucknow transit points to anchor the sparse grid
+    v_coords = [[26.8467, 80.9462], [26.8888, 80.9131], [26.7915, 80.9035]] # Hazratganj, Munshi Pulia, etc.
+    v_synapses = pd.DataFrame(v_coords, columns=["lat", "lon"])
+    v_synapses["res"] = df_live["res"].mean() # Global error bias
 
-    # 3. NOVEL: SYNTHETIC AUGMENTATION (HA-RK)
-    # We create virtual stations to fill gaps where Lucknow has no sensors
-    v_lats = np.linspace(26.75, 26.95, 5) 
-    v_lons = np.linspace(80.85, 81.05, 5)
-    v_lon_g, v_lat_g = np.meshgrid(v_lons, v_lats)
-    
-    virtual_points = pd.DataFrame({'lat': v_lat_g.ravel(), 'lon': v_lon_g.ravel()})
-    # Identify local historical bias for these virtual points at this specific hour
-    virtual_points['res'] = virtual_points.apply(
-        lambda row: (df_train[(df_train['hour'] == now.hour) & 
-                     (np.abs(df_train['lat'] - row['lat']) < 0.03)]['pm10'].mean() 
-                     - df_train['pm10'].mean()), axis=1
-    ).fillna(0) # Fill with 0 if no local history exists
+    combined_res = pd.concat([df_live[["lat", "lon", "res"]], v_synapses])
 
-    # Combine Real + Virtual for a denser Kriging grid
-    combined_res = pd.concat([df_live[['lat', 'lon', 'res']], virtual_points])
-
-    # 4. KRIGING (Switching to Exponential for better sparse-data performance)
-    grid_res = 200
-    lats = np.linspace(26.75, 26.95, grid_res)
-    lons = np.linspace(80.85, 81.05, grid_res)
-    
-    # --- NEW OPTIMIZED KRIGING (HA-RK) ---
     try:
-        # Using Spherical model with limited lags to handle sparse Lucknow stations
         OK = OrdinaryKriging(
-            combined_res.lon, 
-            combined_res.lat, 
-            combined_res.res, 
-            variogram_model="spherical", 
-            nlags=6,      
-            weight=True   
+            combined_res.lon, combined_res.lat, combined_res.res, 
+            variogram_model="hole-effect", # Hole-effect is novel; it accounts for urban cyclic gaps
+            nlags=6, weight=True
         )
-        # Execute on the regular grid
         z_res, _ = OK.execute("grid", lons, lats)
-    except Exception as e:
-        st.error(f"Kriging failed: {e}")
-        z_res = np.zeros((len(lats), len(lons)))
+    except:
+        z_res = np.zeros((grid_res, grid_res))
 
-    # 5. FINAL FUSION
-    lon_g, lat_g = np.meshgrid(lons, lats)
-    # 1. Define the 'memory' value to use for the whole city (Current Average)
-    avg_lag = df_live["pm10"].mean()
-
-# 2. Update the stack to have exactly 9 columns
-    rf_trend_log = rf.predict(np.column_stack([
-        lat_g.ravel(),                      # 1: lat
-        lon_g.ravel(),                      # 2: lon
-        np.full(lat_g.size, now.hour),      # 3: hour
-        np.full(lat_g.size, now.dayofweek), # 4: dayofweek
-        np.full(lat_g.size, now.month),     # 5: month
-        np.full(lat_g.size, weather_now["temp"]), # 6: temp
-        np.full(lat_g.size, weather_now["hum"]),  # 7: hum
-        np.full(lat_g.size, weather_now["wind"]), # 8: wind
-        np.full(lat_g.size, avg_lag)              # 9: pm10_lag1 (THE FIX)
-    ])).reshape(grid_res, grid_res)
-
-# 3. Back-transform from log-space to real PM10
-    rf_trend = np.expm1(rf_trend_log)
-
-    z_final = gaussian_filter(rf_trend + z_res.T, sigma=2.0)
+# 5. FINAL NSS-NET FUSION
+# Scale the grid for the RF prediction
+    grid_points = np.column_stack([
+        lat_g.ravel(), lon_g.ravel(),
+        np.full(lat_g.size, now.hour), np.full(lat_g.size, now.dayofweek),
+        np.full(lat_g.size, now.month),
+        np.full(lat_g.size, weather_now["temp"]),
+        np.full(lat_g.size, weather_now["hum"]),
+        np.full(lat_g.size, weather_now["wind"]),
+        np.full(lat_g.size, df_live["pm10"].mean())
+    ])
+    grid_scaled = scaler.transform(grid_points)
+    z_final = np.expm1(rf_axon.predict(grid_scaled).reshape(grid_res, grid_res)) + z_res.T
+    z_final = gaussian_filter(z_final, sigma=1.5)
     z_final[z_final < 0] = 0
 
     # --- MAP ---
