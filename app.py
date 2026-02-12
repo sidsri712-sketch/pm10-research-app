@@ -40,15 +40,8 @@ TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
 LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
 DB_FILE = "lucknow_pm10_history.csv"
 
-# THINGSPEAK CONFIG (New Integration)
-TS_CHANNEL_ID = "3245947"
-TS_READ_KEY = "KMFZAL0I4BI752II"
 
-st.set_page_config(
-    page_title="Lucknow PM10 Hybrid Spatial Model",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+
 
 # Auto-refresh every 30 minutes
 st_autorefresh(interval=1800000, key="refresh")
@@ -272,6 +265,8 @@ if run_hybrid or run_diag or predict_custom:
     # TRAINING DATA
     # 1. ENHANCED TRAINING WITH HISTORICAL BIAS
     df_train = df_history.copy()
+    # 1. ENHANCED TRAINING DATA PREP
+    df_train = df_history.copy()
     if df_train.empty:
         st.warning("Not enough historical cloud data for training.")
         st.stop()
@@ -280,14 +275,27 @@ if run_hybrid or run_diag or predict_custom:
     df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
     df_train["month"] = df_train["timestamp"].dt.month
 
-    features = ["lat","lon","hour", "dayofweek", "month", "temp", "hum", "wind"]
-    rf = RandomForestRegressor(n_estimators=1000, max_depth=5, random_state=42)
-    rf.fit(df_train[features], df_train["pm10"])
+    # Apply Log Transformation to stabilize variance (Crucial for lowering RMSE)
+    df_train["pm10_log"] = np.log1p(df_train["pm10"])
 
-    # 2. COMPUTE LIVE RESIDUALS
+    features = ["lat","lon","hour", "dayofweek", "month", "temp", "hum", "wind"]
+
+    # 2. TUNED RANDOM FOREST
+    rf = RandomForestRegressor(
+        n_estimators=1000, 
+        max_depth=7,            # Increased depth to capture Lucknow's micro-patterns
+        min_samples_leaf=2,     # Prevents overfitting to noisy station data
+        random_state=42
+    )
+    rf.fit(df_train[features], df_train["pm10_log"])
+
+    # 3. COMPUTE RESIDUALS WITH BACK-TRANSFORMATION
     now = pd.Timestamp.now()
     df_live["hour"], df_live["dayofweek"], df_live["month"] = now.hour, now.dayofweek, now.month
-    df_live["res"] = (df_live["pm10"] - rf.predict(df_live[features])) * weather_mult
+    
+    # Predict in log-space, then transform back to original scale using expm1
+    log_preds = rf.predict(df_live[features])
+    df_live["res"] = (df_live["pm10"] - np.expm1(log_preds)) * weather_mult
 
     # 3. NOVEL: SYNTHETIC AUGMENTATION (HA-RK)
     # We create virtual stations to fill gaps where Lucknow has no sensors
@@ -311,11 +319,22 @@ if run_hybrid or run_diag or predict_custom:
     lats = np.linspace(26.75, 26.95, grid_res)
     lons = np.linspace(80.85, 81.05, grid_res)
     
+    # --- NEW OPTIMIZED KRIGING (HA-RK) ---
     try:
-        OK = OrdinaryKriging(combined_res.lon, combined_res.lat, combined_res.res, variogram_model="exponential")
+        # Using Spherical model with limited lags to handle sparse Lucknow stations
+        OK = OrdinaryKriging(
+            combined_res.lon, 
+            combined_res.lat, 
+            combined_res.res, 
+            variogram_model="spherical", 
+            nlags=6,      
+            weight=True   
+        )
+        # Execute on the regular grid
         z_res, _ = OK.execute("grid", lons, lats)
-    except:
-        z_res = np.zeros((grid_res, grid_res))
+    except Exception as e:
+        st.error(f"Kriging failed: {e}")
+        z_res = np.zeros((len(lats), len(lons)))
 
     # 5. FINAL FUSION
     lon_g, lat_g = np.meshgrid(lons, lats)
