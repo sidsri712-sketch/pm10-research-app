@@ -293,13 +293,12 @@ if run_hybrid or run_diag or predict_custom:
     lon_g, lat_g = np.meshgrid(lons, lats)
 
     rf_trend = rf.predict(np.column_stack([
-        lat_g.ravel(), lon_g.ravel(),
-        np.full(lat_g.size, now.hour),
-        np.full(lat_g.size, now.dayofweek),
-        np.full(lat_g.size, now.month),
-        np.full(lat_g.size, weather_now["temp"]),
-        np.full(lat_g.size, weather_now["hum"]),
-        np.full(lat_g.size, weather_now["wind"])
+            np.full(lat_g.size, now.hour),
+            np.full(lat_g.size, now.dayofweek),
+            np.full(lat_g.size, now.month),
+            np.full(lat_g.size, weather_now["temp"]),
+            np.full(lat_g.size, weather_now["hum"]),
+            np.full(lat_g.size, weather_now["wind"])
     ])).reshape(grid_res, grid_res)
 
     # Increased sigma for a circular, diffused look
@@ -425,9 +424,12 @@ if run_hybrid or run_diag or predict_custom:
                 wind = weather_df["wind"].iloc[0]
 
             pred = rf.predict(np.array([[
-                custom_lat, custom_lon,
-                ft.hour, ft.dayofweek, ft.month,
-                temp, hum, wind
+                ft.hour,
+                ft.dayofweek,
+                ft.month,
+                temp,
+                hum,
+                wind
             ]]))[0]
 
             future_preds.append({
