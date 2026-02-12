@@ -346,14 +346,24 @@ if run_hybrid or run_diag or predict_custom:
 
     # 5. FINAL FUSION
     lon_g, lat_g = np.meshgrid(lons, lats)
-    rf_trend = rf.predict(np.column_stack([
-            lat_g.ravel(), lon_g.ravel(),
-            np.full(lat_g.size, now.hour), np.full(lat_g.size, now.dayofweek),
-            np.full(lat_g.size, now.month),
-            np.full(lat_g.size, weather_now["temp"]),
-            np.full(lat_g.size, weather_now["hum"]),
-            np.full(lat_g.size, weather_now["wind"])
+    # 1. Define the 'memory' value to use for the whole city (Current Average)
+    avg_lag = df_live["pm10"].mean()
+
+# 2. Update the stack to have exactly 9 columns
+    rf_trend_log = rf.predict(np.column_stack([
+        lat_g.ravel(),                      # 1: lat
+        lon_g.ravel(),                      # 2: lon
+        np.full(lat_g.size, now.hour),      # 3: hour
+        np.full(lat_g.size, now.dayofweek), # 4: dayofweek
+        np.full(lat_g.size, now.month),     # 5: month
+        np.full(lat_g.size, weather_now["temp"]), # 6: temp
+        np.full(lat_g.size, weather_now["hum"]),  # 7: hum
+        np.full(lat_g.size, weather_now["wind"]), # 8: wind
+        np.full(lat_g.size, avg_lag)              # 9: pm10_lag1 (THE FIX)
     ])).reshape(grid_res, grid_res)
+
+# 3. Back-transform from log-space to real PM10
+rf_trend = np.expm1(rf_trend_log)
 
     z_final = gaussian_filter(rf_trend + z_res.T, sigma=2.0)
     z_final[z_final < 0] = 0
