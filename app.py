@@ -270,59 +270,65 @@ if run_hybrid or run_diag or predict_custom:
             st.pyplot(fig)
 
     # TRAINING DATA
+    # 1. ENHANCED TRAINING WITH HISTORICAL BIAS
     df_train = df_history.copy()
     if df_train.empty:
-        st.warning("not enough historical cloud data for training.")
+        st.warning("Not enough historical cloud data for training.")
         st.stop()
         
-    df_train["timestamp"] = pd.to_datetime(df_train["timestamp"])
     df_train["hour"] = df_train["timestamp"].dt.hour
     df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
     df_train["month"] = df_train["timestamp"].dt.month
 
     features = ["lat","lon","hour", "dayofweek", "month", "temp", "hum", "wind"]
-
     rf = RandomForestRegressor(n_estimators=1000, max_depth=5, random_state=42)
     rf.fit(df_train[features], df_train["pm10"])
 
+    # 2. COMPUTE LIVE RESIDUALS
     now = pd.Timestamp.now()
-    df_live["hour"] = now.hour
-    df_live["dayofweek"] = now.dayofweek
-    df_live["month"] = now.month
+    df_live["hour"], df_live["dayofweek"], df_live["month"] = now.hour, now.dayofweek, now.month
+    df_live["res"] = (df_live["pm10"] - rf.predict(df_live[features])) * weather_mult
 
-    df_live["residuals"] = (
-        df_live["pm10"] - rf.predict(df_live[features])
-    ) * weather_mult
-
+    # 3. NOVEL: SYNTHETIC AUGMENTATION (HA-RK)
+    # We create virtual stations to fill gaps where Lucknow has no sensors
+    v_lats = np.linspace(26.75, 26.95, 5) 
+    v_lons = np.linspace(80.85, 81.05, 5)
+    v_lon_g, v_lat_g = np.meshgrid(v_lons, v_lats)
     
+    virtual_points = pd.DataFrame({'lat': v_lat_g.ravel(), 'lon': v_lon_g.ravel()})
+    # Identify local historical bias for these virtual points at this specific hour
+    virtual_points['res'] = virtual_points.apply(
+        lambda row: (df_train[(df_train['hour'] == now.hour) & 
+                     (np.abs(df_train['lat'] - row['lat']) < 0.03)]['pm10'].mean() 
+                     - df_train['pm10'].mean()), axis=1
+    ).fillna(0) # Fill with 0 if no local history exists
 
-    # --- MAP ---
-    # GRID - Increased buffer to 0.1 to allow radial dispersion
-    grid_res = 250
-    lats = np.linspace(df_live.lat.min()-0.1, df_live.lat.max()+0.1, grid_res)
-    lons = np.linspace(df_live.lon.min()-0.1, df_live.lon.max()+0.1, grid_res)
+    # Combine Real + Virtual for a denser Kriging grid
+    combined_res = pd.concat([df_live[['lat', 'lon', 'res']], virtual_points])
 
+    # 4. KRIGING (Switching to Exponential for better sparse-data performance)
+    grid_res = 200
+    lats = np.linspace(26.75, 26.95, grid_res)
+    lons = np.linspace(80.85, 81.05, grid_res)
+    
     try:
-        OK = OrdinaryKriging(df_live.lon, df_live.lat, df_live["residuals"], variogram_model="gaussian")
+        OK = OrdinaryKriging(combined_res.lon, combined_res.lat, combined_res.res, variogram_model="exponential")
         z_res, _ = OK.execute("grid", lons, lats)
     except:
         z_res = np.zeros((grid_res, grid_res))
 
+    # 5. FINAL FUSION
     lon_g, lat_g = np.meshgrid(lons, lats)
-
     rf_trend = rf.predict(np.column_stack([
-            lat_g.ravel(),
-            lon_g.ravel(),
-            np.full(lat_g.size, now.hour),
-            np.full(lat_g.size, now.dayofweek),
+            lat_g.ravel(), lon_g.ravel(),
+            np.full(lat_g.size, now.hour), np.full(lat_g.size, now.dayofweek),
             np.full(lat_g.size, now.month),
             np.full(lat_g.size, weather_now["temp"]),
             np.full(lat_g.size, weather_now["hum"]),
             np.full(lat_g.size, weather_now["wind"])
     ])).reshape(grid_res, grid_res)
 
-    # Increased sigma for a circular, diffused look
-    z_final = gaussian_filter(rf_trend * weather_mult + z_res.T, sigma=3.0)
+    z_final = gaussian_filter(rf_trend + z_res.T, sigma=2.0)
     z_final[z_final < 0] = 0
 
     # --- MAP ---
