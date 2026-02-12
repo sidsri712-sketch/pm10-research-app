@@ -267,27 +267,27 @@ if run_hybrid or run_diag or predict_custom:
     # 1. CREATE TIME-LAGS (The 'Memory' of the model)
 # We sort by time and create a 'previous hour' column for each station
     # --- SAFE TRAINING PREPARATION ---
-df_train = df_history.copy().sort_values("timestamp")
+    df_train = df_history.copy().sort_values("timestamp")
 
 # 1. Create the Lag feature
-df_train["pm10_lag1"] = df_train.groupby(["lat", "lon"])["pm10"].shift(1)
+    df_train["pm10_lag1"] = df_train.groupby(["lat", "lon"])["pm10"].shift(1)
 # Important: Fill NaNs so the model doesn't crash
-df_train["pm10_lag1"] = df_train["pm10_lag1"].fillna(df_train["pm10"].median())
+    df_train["pm10_lag1"] = df_train["pm10_lag1"].fillna(df_train["pm10"].median())
 
 # 2. Ensure Time features exist
-df_train["hour"] = df_train["timestamp"].dt.hour
-df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
-df_train["month"] = df_train["timestamp"].dt.month
+    df_train["hour"] = df_train["timestamp"].dt.hour
+    df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
+    df_train["month"] = df_train["timestamp"].dt.month
 
 # 3. Log Transformation
-df_train["target"] = np.log1p(df_train["pm10"])
+    df_train["target"] = np.log1p(df_train["pm10"])
 
 # 4. Define features (Double check these names match your df_train columns exactly)
-features_with_lag = ["lat", "lon", "hour", "dayofweek", "month", "temp", "hum", "wind", "pm10_lag1"]
+    features_with_lag = ["lat", "lon", "hour", "dayofweek", "month", "temp", "hum", "wind", "pm10_lag1"]
 
 # 5. Training
-rf = RandomForestRegressor(n_estimators=1000, max_depth=7, random_state=42)
-rf.fit(df_train[features_with_lag], df_train["target"])
+    rf = RandomForestRegressor(n_estimators=1000, max_depth=7, random_state=42)
+    rf.fit(df_train[features_with_lag], df_train["target"])
 
     # 3. COMPUTE RESIDUALS WITH BACK-TRANSFORMATION
     now = pd.Timestamp.now()
