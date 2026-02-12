@@ -219,22 +219,22 @@ if run_hybrid or run_diag or predict_custom:
         st.stop()
 
     if run_diag:
-    st.subheader("📊 Model Diagnostics")
-    res, mae, rmse = run_diagnostics(df_live)
+        st.subheader("📊 Model Diagnostics")
+        res, mae, rmse = run_diagnostics(df_live)
 
-    from sklearn.metrics import r2_score
-    r2 = r2_score(res["Actual"], res["Predicted"])
+        from sklearn.metrics import r2_score
+        r2 = r2_score(res["Actual"], res["Predicted"])
 
-    c1, c2 = st.columns(2)
+        c1, c2 = st.columns(2)
 
-    with c1:
-        fig, ax = plt.subplots()
-        sns.regplot(data=res, x="Actual", y="Predicted", ax=ax)
-        st.pyplot(fig)
+        with c1:
+            fig, ax = plt.subplots()
+            sns.regplot(data=res, x="Actual", y="Predicted", ax=ax)
+            st.pyplot(fig)
 
-        st.metric("MAE", f"{mae:.2f} µg/m³")
-        st.metric("RMSE", f"{rmse:.2f} µg/m³")
-        st.metric("R²", f"{r2:.3f}")
+            st.metric("MAE", f"{mae:.2f} µg/m³")
+            st.metric("RMSE", f"{rmse:.2f} µg/m³")
+            st.metric("R²", f"{r2:.3f}")
         with c2:
             fig, ax = plt.subplots()
             sns.histplot(df_live["pm10"], kde=True, ax=ax)
