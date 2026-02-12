@@ -139,46 +139,36 @@ def fetch_pm10_data():
 # --------------------------------------------------
 # LOOCV DIAGNOSTICS
 # --------------------------------------------------
-from sklearn.model_selection import KFold
-from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-
 def run_diagnostics(df):
-
-    st.write("Stations:", len(df))
-    st.write("PM10 Std Dev:", np.std(df["pm10"]))
-    st.write("PM10 Range:", df["pm10"].min(), "to", df["pm10"].max())
-
-    features = ["lat", "lon", "temp", "hum", "wind"]
-
-    X = df[features].values
-    y = df["pm10"].values
-
-    kf = KFold(n_splits=min(5, len(df)), shuffle=True, random_state=42)
-
     preds = []
     actuals = []
 
-    for train_idx, test_idx in kf.split(X):
+    features = ["lat", "lon", "temp", "hum", "wind"]
+
+    for i in range(len(df)):
+        train = df.drop(i)
+        test = df.iloc[i]
+
         rf = RandomForestRegressor(
-            n_estimators=300,
-            max_depth=None,
-            min_samples_leaf=1,
+            n_estimators=100,
+            max_depth=5,
             random_state=42
         )
 
-        rf.fit(X[train_idx], y[train_idx])
-        y_pred = rf.predict(X[test_idx])
+        rf.fit(train[features], train["pm10"])
+        pred = rf.predict(test[features].values.reshape(1, -1))[0]
 
-        preds.extend(y_pred)
-        actuals.extend(y[test_idx])
+        preds.append(pred)
+        actuals.append(test.pm10)
 
-    r2 = r2_score(actuals, preds)
+    from sklearn.metrics import mean_absolute_error, mean_squared_error
+
     mae = mean_absolute_error(actuals, preds)
     rmse = np.sqrt(mean_squared_error(actuals, preds))
 
     res = pd.DataFrame({"Actual": actuals, "Predicted": preds})
 
-    return res, mae, rmse, r2
+    return res, mae, rmse
 
 # --------------------------------------------------
 # UI HEADER
@@ -247,7 +237,7 @@ if run_hybrid or run_diag or predict_custom:
     if run_diag:
         st.subheader("📊 Model Diagnostics")
 
-        res, mae, rmse, r2 = run_diagnostics(df_live)
+        res, mae, rmse = run_diagnostics(df_live)
 
         c1, c2 = st.columns(2)
 
@@ -258,7 +248,6 @@ if run_hybrid or run_diag or predict_custom:
 
             st.metric("MAE", f"{mae:.2f} µg/m³")
             st.metric("RMSE", f"{rmse:.2f} µg/m³")
-            st.metric("R²", f"{r2:.3f}")
 
         with c2:
             fig, ax = plt.subplots()
@@ -274,7 +263,7 @@ if run_hybrid or run_diag or predict_custom:
 
             st.metric("MAE", f"{mae:.2f} µg/m³")
             st.metric("RMSE", f"{rmse:.2f} µg/m³")
-            st.metric("R²", f"{r2:.3f}")
+           
         with c2:
             fig, ax = plt.subplots()
             sns.histplot(df_live["pm10"], kde=True, ax=ax)
