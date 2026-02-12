@@ -143,6 +143,11 @@ from sklearn.model_selection import KFold
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 
 def run_diagnostics(df):
+
+    st.write("Stations:", len(df))
+    st.write("PM10 Std Dev:", np.std(df["pm10"]))
+    st.write("PM10 Range:", df["pm10"].min(), "to", df["pm10"].max())
+
     features = ["lat", "lon", "temp", "hum", "wind"]
 
     X = df[features].values
