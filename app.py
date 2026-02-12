@@ -293,6 +293,8 @@ if run_hybrid or run_diag or predict_custom:
     lon_g, lat_g = np.meshgrid(lons, lats)
 
     rf_trend = rf.predict(np.column_stack([
+            lat_g.ravel(),
+            lon_g.ravel(),
             np.full(lat_g.size, now.hour),
             np.full(lat_g.size, now.dayofweek),
             np.full(lat_g.size, now.month),
@@ -372,6 +374,8 @@ if run_hybrid or run_diag or predict_custom:
     # CUSTOM POINT
     if predict_custom:
         c_rf = rf.predict([[
+            custom_lat,
+            custom_lon,
             now.hour,
             now.dayofweek,
             now.month,
@@ -424,6 +428,8 @@ if run_hybrid or run_diag or predict_custom:
                 wind = weather_df["wind"].iloc[0]
 
             pred = rf.predict(np.array([[
+                custom_lat,
+                custom_lon,
                 ft.hour,
                 ft.dayofweek,
                 ft.month,
