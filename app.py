@@ -65,17 +65,26 @@ def fetch_weather():
     try:
         url = (
             "https://api.open-meteo.com/v1/forecast?"
-            "latitude=26.85&longitude=80.94&current="
-            "temperature_2m,relative_humidity_2m,wind_speed_10m"
+            "latitude=26.85&longitude=80.94&"
+            "hourly=temperature_2m,relative_humidity_2m,wind_speed_10m&"
+            "forecast_days=2&timezone=Asia%2FKolkata"
         )
+
         r = requests.get(url).json()
-        return {
-            "temp": r["current"]["temperature_2m"],
-            "hum": r["current"]["relative_humidity_2m"],
-            "wind": r["current"]["wind_speed_10m"]
-        }
-    except:
-        return {"temp": 25.0, "hum": 50.0, "wind": 5.0}
+
+        hourly = r["hourly"]
+        df_weather = pd.DataFrame({
+            "timestamp": pd.to_datetime(hourly["time"]),
+            "temp": hourly["temperature_2m"],
+            "hum": hourly["relative_humidity_2m"],
+            "wind": hourly["wind_speed_10m"]
+        })
+
+        return df_weather
+
+    except Exception as e:
+        st.error(f"Weather fetch failed: {e}")
+        return pd.DataFrame()
 
 # --------------------------------------------------
 # DATA PIPELINE
@@ -136,19 +145,20 @@ def run_diagnostics(df):
         rf = RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42)
         rf.fit(train[features], train["pm10"])
         residuals = train["pm10"] - rf.predict(train[features])
-
+       
         try:
             ok = OrdinaryKriging(train.lon, train.lat, residuals, variogram_model="gaussian")
             r, _ = ok.execute("points", [test.lon], [test.lat])
-            pred = rf.predict([test[features]])[0] + r[0]
+            pred = rf.predict(test[features].values.reshape(1, -1))[0] + r[0]
         except:
             pred = rf.predict([test[features]])[0]
 
         preds.append({"Actual": test.pm10, "Predicted": pred})
-
+    
     res = pd.DataFrame(preds)
     mae = np.mean(np.abs(res["Actual"] - res["Predicted"]))
-    return res, mae
+    rmse = np.sqrt(np.mean((res["Actual"] - res["Predicted"])**2))
+    return res, mae, rmse
 
 # --------------------------------------------------
 # UI HEADER
@@ -209,14 +219,22 @@ if run_hybrid or run_diag or predict_custom:
         st.stop()
 
     if run_diag:
-        st.subheader("📊 Model Diagnostics")
-        res, mae = run_diagnostics(df_live)
-        c1, c2 = st.columns(2)
-        with c1:
-            fig, ax = plt.subplots()
-            sns.regplot(data=res, x="Actual", y="Predicted", ax=ax)
-            st.pyplot(fig)
-            st.metric("MAE", f"{mae:.2f} µg/m³")
+    st.subheader("📊 Model Diagnostics")
+    res, mae, rmse = run_diagnostics(df_live)
+
+    from sklearn.metrics import r2_score
+    r2 = r2_score(res["Actual"], res["Predicted"])
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        fig, ax = plt.subplots()
+        sns.regplot(data=res, x="Actual", y="Predicted", ax=ax)
+        st.pyplot(fig)
+
+        st.metric("MAE", f"{mae:.2f} µg/m³")
+        st.metric("RMSE", f"{rmse:.2f} µg/m³")
+        st.metric("R²", f"{r2:.3f}")
         with c2:
             fig, ax = plt.subplots()
             sns.histplot(df_live["pm10"], kde=True, ax=ax)
@@ -233,7 +251,7 @@ if run_hybrid or run_diag or predict_custom:
     df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
     df_train["month"] = df_train["timestamp"].dt.month
 
-    features = ["lat", "lon", "hour", "dayofweek", "month", "temp", "hum", "wind"]
+    features = ["hour", "dayofweek", "month", "temp", "hum", "wind"]
 
     rf = RandomForestRegressor(n_estimators=1000, max_depth=5, random_state=42)
     rf.fit(df_train[features], df_train["pm10"])
@@ -392,17 +410,33 @@ if run_hybrid or run_diag or predict_custom:
         # 1. Historical Trend
         df_r = df_f.set_index("timestamp").resample("H").mean(numeric_only=True).dropna()
         
-        # 2. Generate Future Timestamps for Forecast
-        future_times = [pd.Timestamp.now() + pd.Timedelta(hours=i) for i in range(1, 25)]
-        
-        # Fetch future weather (simplified from your weather_now or Open-Meteo)
-        future_preds = []
-        for ft in future_times:
-            pred = rf.predict([[
-                custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month,
-                weather_now["temp"], weather_now["hum"], weather_now["wind"]
-            ]])[0]
-            future_preds.append({"timestamp": ft, "pm10": pred, "Type": "Forecast"})
+        weather_df = fetch_weather()
+
+future_preds = []
+
+for ft in future_times:
+    weather_row = weather_df[weather_df["timestamp"] == ft.floor("H")]
+
+    if not weather_row.empty:
+        temp = weather_row["temp"].values[0]
+        hum = weather_row["hum"].values[0]
+        wind = weather_row["wind"].values[0]
+    else:
+        # fallback if timestamp mismatch
+        temp = weather_df["temp"].iloc[0]
+        hum = weather_df["hum"].iloc[0]
+        wind = weather_df["wind"].iloc[0]
+
+    pred = rf.predict(np.array([[
+        custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month,
+        temp, hum, wind
+    ]]))[0]
+
+    future_preds.append({
+        "timestamp": ft,
+        "pm10": pred,
+        "Type": "Forecast"
+    })
 
         df_forecast = pd.DataFrame(future_preds).set_index("timestamp")
         
