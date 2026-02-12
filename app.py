@@ -264,30 +264,23 @@ if run_hybrid or run_diag or predict_custom:
 
     # TRAINING DATA
     # 1. ENHANCED TRAINING WITH HISTORICAL BIAS
-    df_train = df_history.copy()
-    # 1. ENHANCED TRAINING DATA PREP
-    df_train = df_history.copy()
-    if df_train.empty:
-        st.warning("Not enough historical cloud data for training.")
-        st.stop()
-        
-    df_train["hour"] = df_train["timestamp"].dt.hour
-    df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
-    df_train["month"] = df_train["timestamp"].dt.month
+    # 1. CREATE TIME-LAGS (The 'Memory' of the model)
+# We sort by time and create a 'previous hour' column for each station
+    df_train = df_history.copy().sort_values("timestamp")
+    df_train["pm10_lag1"] = df_train.groupby(["lat", "lon"])["pm10"].shift(1)
 
-    # Apply Log Transformation to stabilize variance (Crucial for lowering RMSE)
-    df_train["pm10_log"] = np.log1p(df_train["pm10"])
+# Fill the first hour of each station with the city median so we don't have NaNs
+    df_train["pm10_lag1"] = df_train["pm10_lag1"].fillna(df_train["pm10"].median())
 
-    features = ["lat","lon","hour", "dayofweek", "month", "temp", "hum", "wind"]
+# 2. LOG TRANSFORMATION (Prevents unrealistic swings)
+    df_train["target"] = np.log1p(df_train["pm10"])
 
-    # 2. TUNED RANDOM FOREST
-    rf = RandomForestRegressor(
-        n_estimators=1000, 
-        max_depth=7,            # Increased depth to capture Lucknow's micro-patterns
-        min_samples_leaf=2,     # Prevents overfitting to noisy station data
-        random_state=42
-    )
-    rf.fit(df_train[features], df_train["pm10_log"])
+# Update feature list to include the lag
+    features_with_lag = ["lat","lon","hour", "dayofweek", "month", "temp", "hum", "wind", "pm10_lag1"]
+
+# 3. TRAIN TUNED RF
+    rf = RandomForestRegressor(n_estimators=1000, max_depth=7, random_state=42)
+    rf.fit(df_train[features_with_lag], df_train["target"])
 
     # 3. COMPUTE RESIDUALS WITH BACK-TRANSFORMATION
     now = pd.Timestamp.now()
@@ -457,38 +450,32 @@ if run_hybrid or run_diag or predict_custom:
             freq="H"
         )
 
+        # --- REPLACEMENT: RECURSIVE FORECAST LOOP ---
+# We start with the current average PM10 of Lucknow as our 'first lag'
+        current_lag_value = df_live["pm10"].mean() 
+        future_results = []
+
         for ft in future_times:
-            weather_row = weather_df[weather_df["timestamp"] == ft.floor("H")]
+    # Prepare the input vector including the PREVIOUS hour's prediction
+            input_vector = [
+                custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month, 
+                weather_now["temp"], weather_now["hum"], weather_now["wind"], 
+                current_lag_value
+    ]
+    
+    # Predict in log-space and transform back to real PM10
+            pred_log = rf.predict([input_vector])[0]
+            pred_real = np.expm1(pred_log)
+    
+    # SAFETY: Ensure it doesn't drop below the city's historical 'floor'
+            pred_real = max(pred_real, df_train["pm10"].min())
+    
+            future_results.append({"timestamp": ft, "pm10": pred_real})
+    
+    # CRITICAL: The current prediction becomes the input for the next hour!
+            current_lag_value = pred_real 
 
-            if not weather_row.empty:
-                temp = weather_row["temp"].values[0]
-                hum = weather_row["hum"].values[0]
-                wind = weather_row["wind"].values[0]
-            else:
-        # fallback if timestamp mismatch
-                temp = weather_df["temp"].iloc[0]
-                hum = weather_df["hum"].iloc[0]
-                wind = weather_df["wind"].iloc[0]
-
-            pred = rf.predict(np.array([[
-                custom_lat,
-                custom_lon,
-                ft.hour,
-                ft.dayofweek,
-                ft.month,
-                temp,
-                hum,
-                wind
-            ]]))[0]
-
-            future_preds.append({
-                "timestamp": ft,
-                "pm10": pred,
-                "Type": "Forecast"
-            })
-
-# ⬇️ OUTSIDE THE LOOP
-        df_forecast = pd.DataFrame(future_preds).set_index("timestamp")
+        df_forecast = pd.DataFrame(future_results)
 
 # Combine Historical and Forecast for chart
         df_r["Type"] = "Historical"
