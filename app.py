@@ -294,8 +294,16 @@ if run_hybrid or run_diag or predict_custom:
     df_live["hour"], df_live["dayofweek"], df_live["month"] = now.hour, now.dayofweek, now.month
     
     # Predict in log-space, then transform back to original scale using expm1
-    log_preds = rf.predict(df_live[features])
+    # --- FIXING THE NAME ERROR ---
+# Ensure df_live has the same 'memory' feature as df_train
+    df_live["pm10_lag1"] = df_live["pm10"] # For live data, we use current pm10 as the baseline lag
+
+# Use the updated feature list name
+    log_preds = rf.predict(df_live[features_with_lag]) 
+
+# Back-transform from log to real scale
     df_live["res"] = (df_live["pm10"] - np.expm1(log_preds)) * weather_mult
+    
 
     # 3. NOVEL: SYNTHETIC AUGMENTATION (HA-RK)
     # We create virtual stations to fill gaps where Lucknow has no sensors
