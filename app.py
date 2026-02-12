@@ -437,8 +437,7 @@ for ft in future_times:
         "pm10": pred,
         "Type": "Forecast"
     })
-
-     df_forecast = pd.DataFrame(future_preds).set_index("timestamp")
+        df_forecast = pd.DataFrame(future_preds).set_index("timestamp")
         
         # Combine Historical and Forecast for the chart
         df_r["Type"] = "Historical"
