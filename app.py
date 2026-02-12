@@ -132,33 +132,50 @@ def fetch_pm10_data():
 # --------------------------------------------------
 # LOOCV DIAGNOSTICS
 # --------------------------------------------------
+# --------------------------------------------------
+# NSS-NET UPGRADED DIAGNOSTICS
+# --------------------------------------------------
 def run_diagnostics(df):
+    from sklearn.metrics import mean_absolute_error, mean_squared_error
+    from sklearn.preprocessing import StandardScaler
+    
     preds = []
     actuals = []
+    
+    # 1. Prepare Diagnostic DataFrame
+    df_diag = df.copy()
+    now = pd.Timestamp.now()
+    df_diag["hour"] = now.hour
+    df_diag["dayofweek"] = now.dayofweek
+    df_diag["month"] = now.month
+    
+    # Since LOOCV is a snapshot, we use the city median for the lag-anchor
+    df_diag["pm10_lag1"] = df_diag["pm10"].median() 
+    
+    features = ["lat", "lon", "hour", "dayofweek", "month", "temp", "hum", "wind", "pm10_lag1"]
+    
+    # 2. LOOCV Loop (Leave-One-Out)
+    for i in range(len(df_diag)):
+        train = df_diag.drop(df_diag.index[i])
+        test = df_diag.iloc[[i]]
 
-    features = ["lat", "lon", "temp", "hum", "wind"]
+        # Scaling logic inside the fold
+        scaler_diag = StandardScaler()
+        train_scaled = scaler_diag.fit_transform(train[features])
+        test_scaled = scaler_diag.transform(test[features])
 
-    for i in range(len(df)):
-        train = df.drop(i)
-        test = df.iloc[i]
+        # Train on Log-scale
+        rf = RandomForestRegressor(n_estimators=500, max_depth=7, random_state=42)
+        rf.fit(train_scaled, np.log1p(train["pm10"]))
+        
+        # Predict and Back-transform
+        pred_log = rf.predict(test_scaled)[0]
+        preds.append(np.expm1(pred_log))
+        actuals.append(test.pm10.values[0])
 
-        rf = RandomForestRegressor(
-            n_estimators=100,
-            max_depth=5,
-            random_state=42
-        )
-
-        rf.fit(train[features], train["pm10"])
-        pred = rf.predict(test[features].values.reshape(1, -1))[0]
-
-        preds.append(pred)
-        actuals.append(test.pm10)
-
-    from sklearn.metrics import mean_absolute_error, mean_squared_error
-
+    # 3. Compute Metrics
     mae = mean_absolute_error(actuals, preds)
     rmse = np.sqrt(mean_squared_error(actuals, preds))
-
     res = pd.DataFrame({"Actual": actuals, "Predicted": preds})
 
     return res, mae, rmse
