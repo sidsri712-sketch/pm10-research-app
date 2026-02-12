@@ -181,13 +181,7 @@ else:
     st.sidebar.warning("Syncing Cloud Database...")
 
 # --- LIVE SENSOR LINK (New Sidebar Feature) ---
-st.sidebar.subheader("📡 Live Sensor Link")
-ts_data = fetch_thingspeak_data()
-if ts_data:
-    st.sidebar.success(f"Live Node PM10: {ts_data.get('field1', 'N/A')} µg/m³")
-    st.sidebar.caption(f"Last Sensor Sync: {ts_data.get('created_at')}")
-else:
-    st.sidebar.info("Waiting for ThingSpeak Sensor...")
+
 
 opacity = st.sidebar.slider("Layer Transparency", 0.1, 1.0, 0.75)
 weather_mult = st.sidebar.slider("Weather Amplification (%)", 50, 200, 100) / 100
