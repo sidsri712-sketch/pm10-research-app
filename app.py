@@ -263,61 +263,63 @@ if run_hybrid or run_diag or predict_custom:
             st.pyplot(fig)
 
     # TRAINING DATA
-    # 1. ENHANCED TRAINING WITH HISTORICAL BIAS
-    # 1. CREATE TIME-LAGS (The 'Memory' of the model)
-# We sort by time and create a 'previous hour' column for each station
-    # --- SAFE TRAINING PREPARATION ---
-    # --- [REPLACE STARTING FROM TRAINING BLOCK] ---
+    # --------------------------------------------------
+    # 1. NSS-NET PRE-PROCESSING
+    # --------------------------------------------------
+    from sklearn.preprocessing import StandardScaler
+    
+    # Define features and grid resolution early to avoid NameErrors
+    features_nss = ["lat", "lon", "hour", "dayofweek", "month", "temp", "hum", "wind", "pm10_lag1"]
+    grid_res = 200 
+    now = pd.Timestamp.now()
 
-# 1. NSS-NET PRE-PROCESSING: Meteorological Distance Scaling
     df_train = df_history.copy().sort_values("timestamp")
     df_train["hour"] = df_train["timestamp"].dt.hour
     df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
     df_train["month"] = df_train["timestamp"].dt.month
 
-# Generate the Synaptic Lag (Memory)
+    # Create the Synaptic Lag (Memory)
     df_train["pm10_lag1"] = df_train.groupby(["lat", "lon"])["pm10"].shift(1)
     df_train["pm10_lag1"] = df_train["pm10_lag1"].fillna(df_train["pm10"].median())
-
-# NOVEL STEP: Feature Normalization for "Meteorological Distance"
-    from sklearn.preprocessing import StandardScaler
-    scaler = StandardScaler()
-    features_list = ["lat", "lon", "hour", "dayofweek", "month", "temp", "hum", "wind", "pm10_lag1"]
-    df_train_scaled = scaler.fit_transform(df_train[features_list])
-
-# 2. THE AXON: Optimized Random Forest with Log-Target
     df_train["target"] = np.log1p(df_train["pm10"])
-    rf_axon = RandomForestRegressor(n_estimators=1500, max_depth=9, min_samples_leaf=1, random_state=42)
+
+    # Feature Scaling
+    scaler = StandardScaler()
+    df_train_scaled = scaler.fit_transform(df_train[features_nss])
+
+    # 2. THE AXON: Train the Random Forest
+    rf_axon = RandomForestRegressor(n_estimators=1200, max_depth=9, random_state=42)
     rf_axon.fit(df_train_scaled, df_train["target"])
 
-# 3. THE DENDRITE: Dynamic Residual Augmentation
-    now = pd.Timestamp.now()
+    # 3. THE DENDRITE: Process Live Data
     df_live["hour"], df_live["dayofweek"], df_live["month"] = now.hour, now.dayofweek, now.month
-    df_live["pm10_lag1"] = df_live["pm10"] # Anchoring
-
-    live_scaled = scaler.transform(df_live[features_list])
+    df_live["pm10_lag1"] = df_live["pm10"] # Use current as lag anchor
+    
+    live_scaled = scaler.transform(df_live[features_nss])
     df_live["res"] = (df_live["pm10"] - np.expm1(rf_axon.predict(live_scaled)))
 
-# 4. THE SYNAPSE: Error-Weighted Kriging
-# We inject "Virtual Synapses" at key Lucknow transit points to anchor the sparse grid
-    v_coords = [[26.8467, 80.9462], [26.8888, 80.9131], [26.7915, 80.9035]] # Hazratganj, Munshi Pulia, etc.
-    v_synapses = pd.DataFrame(v_coords, columns=["lat", "lon"])
-    v_synapses["res"] = df_live["res"].mean() # Global error bias
+    # 4. SYNAPTIC ANCHORING: Add Virtual Points for Lucknow
+    v_coords = pd.DataFrame([
+        [26.8467, 80.9462], [26.8888, 80.9131], [26.7915, 80.9035], [26.8644, 81.0272]
+    ], columns=["lat", "lon"])
+    v_coords["res"] = df_live["res"].mean()
+    combined_res = pd.concat([df_live[["lat", "lon", "res"]], v_coords])
 
-    combined_res = pd.concat([df_live[["lat", "lon", "res"]], v_synapses])
+    # 5. THE SYNAPSE: Hole-Effect Kriging
+    lats = np.linspace(26.75, 26.95, grid_res)
+    lons = np.linspace(80.85, 81.05, grid_res)
+    lon_g, lat_g = np.meshgrid(lons, lats)
 
     try:
         OK = OrdinaryKriging(
             combined_res.lon, combined_res.lat, combined_res.res, 
-            variogram_model="hole-effect", # Hole-effect is novel; it accounts for urban cyclic gaps
-            nlags=6, weight=True
+            variogram_model="hole-effect", nlags=6, weight=True
         )
         z_res, _ = OK.execute("grid", lons, lats)
     except:
         z_res = np.zeros((grid_res, grid_res))
 
-# 5. FINAL NSS-NET FUSION
-# Scale the grid for the RF prediction
+    # 6. FINAL FUSION
     grid_points = np.column_stack([
         lat_g.ravel(), lon_g.ravel(),
         np.full(lat_g.size, now.hour), np.full(lat_g.size, now.dayofweek),
@@ -327,10 +329,10 @@ if run_hybrid or run_diag or predict_custom:
         np.full(lat_g.size, weather_now["wind"]),
         np.full(lat_g.size, df_live["pm10"].mean())
     ])
+    
     grid_scaled = scaler.transform(grid_points)
-    z_final = np.expm1(rf_axon.predict(grid_scaled).reshape(grid_res, grid_res)) + z_res.T
-    z_final = gaussian_filter(z_final, sigma=1.5)
-    z_final[z_final < 0] = 0
+    rf_trend = np.expm1(rf_axon.predict(grid_scaled).reshape(grid_res, grid_res))
+    z_final = gaussian_filter(rf_trend + z_res.T, sigma=1.5)
 
     # --- MAP ---
     st.subheader("📂 Historical PM10 Database")
@@ -397,24 +399,24 @@ if run_hybrid or run_diag or predict_custom:
     st.pyplot(fig)
 
     # CUSTOM POINT
+    # NSS-NET CUSTOM POINT PREDICTION
     if predict_custom:
-        c_rf = rf.predict([[
-            custom_lat,
-            custom_lon,
-            now.hour,
-            now.dayofweek,
-            now.month,
-            weather_now["temp"],
-            weather_now["hum"],
-            weather_now["wind"]
-        ]])[0]
+        point_data = pd.DataFrame([[
+            custom_lat, custom_lon, now.hour, now.dayofweek, now.month,
+            weather_now["temp"], weather_now["hum"], weather_now["wind"],
+            df_live["pm10"].mean()
+        ]], columns=features_nss)
+        
+        point_scaled = scaler.transform(point_data)
+        c_rf = np.expm1(rf_axon.predict(point_scaled)[0])
+        
         try:
             c_res, _ = OK.execute("points", [custom_lon], [custom_lat])
             c_val = c_rf + c_res[0]
         except:
             c_val = c_rf
 
-        st.metric("Predicted PM10", f"{c_val:.2f} µg/m³")
+        st.sidebar.metric("NSS-Net Prediction", f"{c_val:.2f} µg/m³")
 
     # TREND
 # --------------------------------------------------
