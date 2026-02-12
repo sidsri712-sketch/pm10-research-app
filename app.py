@@ -101,11 +101,16 @@ def fetch_pm10_data():
             for s in r["data"]:
                 d = requests.get(f"https://api.waqi.info/feed/@{s['uid']}/?token={TOKEN}").json()
                 if d.get("status") == "ok" and "pm10" in d["data"].get("iaqi", {}):
+                    weather_now = weather.iloc[0] if not weather.empty else {"temp":25,"hum":50,"wind":2}
+
                     records.append({
-                        "lat": s["lat"], "lon": s["lon"],
+                        "lat": s["lat"],
+                        "lon": s["lon"],
                         "pm10": d["data"]["iaqi"]["pm10"]["v"],
                         "name": d["data"]["city"]["name"],
-                        "temp": weather["temp"], "hum": weather["hum"], "wind": weather["wind"],
+                        "temp": weather_now["temp"],
+                        "hum": weather_now["hum"],
+                        "wind": weather_now["wind"],
                         "timestamp": pd.Timestamp.now()
                     })
                 time.sleep(0.1)
@@ -165,11 +170,17 @@ def run_diagnostics(df):
 # --------------------------------------------------
 st.title("📍 Lucknow PM10 Hybrid Spatial Analysis")
 
-weather_now = fetch_weather()
-c1, c2, c3 = st.columns(3)
-c1.metric("🌡 Temperature", f"{weather_now['temp']} °C")
-c2.metric("💧 Humidity", f"{weather_now['hum']} %")
-c3.metric("💨 Wind Speed", f"{weather_now['wind']} km/h")
+weather_df = fetch_weather()
+
+if not weather_df.empty:
+    weather_now = weather_df.iloc[0]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("🌡 Temperature", f"{weather_now['temp']:.1f} °C")
+    c2.metric("💧 Humidity", f"{weather_now['hum']:.0f} %")
+    c3.metric("💨 Wind Speed", f"{weather_now['wind']:.1f} km/h")
+else:
+    st.warning("Weather data unavailable.")
+    weather_now = pd.Series({"temp":25,"hum":50,"wind":2})
 
 st.sidebar.caption(f"Last refresh: {time.strftime('%H:%M:%S')}")
 
@@ -265,31 +276,7 @@ if run_hybrid or run_diag or predict_custom:
         df_live["pm10"] - rf.predict(df_live[features])
     ) * weather_mult
 
-    # GRID
-    grid_res = 250
-    lats = np.linspace(df_live.lat.min()-0.06, df_live.lat.max()+0.06, grid_res)
-    lons = np.linspace(df_live.lon.min()-0.06, df_live.lon.max()+0.06, grid_res)
-
-    try:
-        OK = OrdinaryKriging(df_live.lon, df_live.lat, df_live["residuals"], variogram_model="gaussian")
-        z_res, _ = OK.execute("grid", lons, lats)
-    except:
-        z_res = np.zeros((grid_res, grid_res))
-
-    lon_g, lat_g = np.meshgrid(lons, lats)
-
-    rf_trend = rf.predict(np.column_stack([
-        lat_g.ravel(), lon_g.ravel(),
-        np.full(lat_g.size, now.hour),
-        np.full(lat_g.size, now.dayofweek),
-        np.full(lat_g.size, now.month),
-        np.full(lat_g.size, weather_now["temp"]),
-        np.full(lat_g.size, weather_now["hum"]),
-        np.full(lat_g.size, weather_now["wind"])
-    ])).reshape(grid_res, grid_res)
-
-    z_final = gaussian_filter(rf_trend * weather_mult + z_res.T, sigma=1.5)
-    z_final[z_final < 0] = 0
+    
 
     # --- MAP ---
     # GRID - Increased buffer to 0.1 to allow radial dispersion
@@ -385,8 +372,14 @@ if run_hybrid or run_diag or predict_custom:
 
     # CUSTOM POINT
     if predict_custom:
-        c_rf = rf.predict([[custom_lat, custom_lon, now.hour, now.dayofweek, now.month,
-                             weather_now["temp"], weather_now["hum"], weather_now["wind"]]])[0]
+        c_rf = rf.predict([[
+            now.hour,
+            now.dayofweek,
+            now.month,
+            weather_now["temp"],
+            weather_now["hum"],
+            weather_now["wind"]
+        ]])[0]
         try:
             c_res, _ = OK.execute("points", [custom_lon], [custom_lat])
             c_val = c_rf + c_res[0]
@@ -412,6 +405,11 @@ if run_hybrid or run_diag or predict_custom:
         # Generate Future Predictions
         weather_df = fetch_weather()
         future_preds = []
+        future_times = pd.date_range(
+            start=pd.Timestamp.now().ceil("H"),
+            periods=24,
+            freq="H"
+        )
 
         for ft in future_times:
             weather_row = weather_df[weather_df["timestamp"] == ft.floor("H")]
@@ -472,5 +470,10 @@ if not df_history.empty and 'pm10' in df_history.columns:
     # Visualizing the "Growth" - Simple Trend of captured data points
     if len(df_history) > 5:
         st.sidebar.caption("Data Accumulation Trend")
-        growth_data = df_history.groupby(pd.to_datetime(df_history['timestamp']).dt.date).size()
+        growth_data = (
+            pd.to_datetime(df_history['timestamp'])
+            .dt.date
+            .value_counts()
+            .sort_index()
+        )
         st.sidebar.line_chart(growth_data)
