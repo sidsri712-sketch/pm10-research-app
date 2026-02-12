@@ -363,7 +363,7 @@ if run_hybrid or run_diag or predict_custom:
     ])).reshape(grid_res, grid_res)
 
 # 3. Back-transform from log-space to real PM10
-rf_trend = np.expm1(rf_trend_log)
+    rf_trend = np.expm1(rf_trend_log)
 
     z_final = gaussian_filter(rf_trend + z_res.T, sigma=2.0)
     z_final[z_final < 0] = 0
