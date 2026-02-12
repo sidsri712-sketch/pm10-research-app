@@ -262,7 +262,7 @@ if run_hybrid or run_diag or predict_custom:
     df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
     df_train["month"] = df_train["timestamp"].dt.month
 
-    features = ["hour", "dayofweek", "month", "temp", "hum", "wind"]
+    features = ["lat","lon","hour", "dayofweek", "month", "temp", "hum", "wind"]
 
     rf = RandomForestRegressor(n_estimators=1000, max_depth=5, random_state=42)
     rf.fit(df_train[features], df_train["pm10"])
