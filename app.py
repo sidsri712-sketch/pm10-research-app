@@ -420,7 +420,7 @@ if run_hybrid or run_diag or predict_custom:
 
     # TREND
 # --------------------------------------------------
-    # TREND & 24-HOUR FUTURE FORECAST
+    # TREND & 24-HOUR FUTURE FORECAST (NSS-Net Version)
     # --------------------------------------------------
     st.subheader("📈 Trend & 24-Hour Forecast")
     
@@ -430,51 +430,53 @@ if run_hybrid or run_diag or predict_custom:
     ]
 
     if len(df_f) > 5:
-        # 1. Historical Trend
+        # 1. Historical Trend (Resampled)
         df_r = df_f.set_index("timestamp").resample("H").mean(numeric_only=True).dropna()
-        # Generate Future Predictions
-        weather_df = fetch_weather()
-        future_preds = []
+        
+        # 2. Setup Future Time Range
         future_times = pd.date_range(
             start=pd.Timestamp.now().ceil("H"),
             periods=24,
             freq="H"
         )
 
-        # --- REPLACEMENT: RECURSIVE FORECAST LOOP ---
-# We start with the current average PM10 of Lucknow as our 'first lag'
+        # 3. FIXED RECURSIVE FORECAST LOOP
+        # Use city-wide average as the starting 'synaptic lag'
         current_lag_value = df_live["pm10"].mean() 
         future_results = []
 
         for ft in future_times:
-    # Prepare the input vector including the PREVIOUS hour's prediction
-            input_vector = [
+            # Prepare feature vector as a DataFrame for the Scaler
+            input_df = pd.DataFrame([[
                 custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month, 
                 weather_now["temp"], weather_now["hum"], weather_now["wind"], 
                 current_lag_value
-    ]
-    
-    # Predict in log-space and transform back to real PM10
-            pred_log = rf.predict([input_vector])[0]
+            ]], columns=features_nss)
+            
+            # SCALE BEFORE PREDICTING (Matches training logic)
+            input_scaled = scaler.transform(input_df)
+            
+            # PREDICT USING RF_AXON
+            pred_log = rf_axon.predict(input_scaled)[0]
             pred_real = np.expm1(pred_log)
-    
-    # SAFETY: Ensure it doesn't drop below the city's historical 'floor'
+            
+            # PHYSICAL SAFETY FLOOR
             pred_real = max(pred_real, df_train["pm10"].min())
-    
+            
             future_results.append({"timestamp": ft, "pm10": pred_real})
-    
-    # CRITICAL: The current prediction becomes the input for the next hour!
+            
+            # UPDATE THE SYNAPSE FOR THE NEXT HOUR
             current_lag_value = pred_real 
 
         df_forecast = pd.DataFrame(future_results)
 
-# Combine Historical and Forecast for chart
+        # 4. CHART PREPARATION
         df_r["Type"] = "Historical"
-        chart_data = pd.concat([df_r[["pm10", "Type"]], df_forecast])
-
-# Display Chart
-        st.line_chart(chart_data["pm10"])
-        st.caption("The graph shows historical averages followed by a 24-hour prediction based on time-cycles.")
+        df_forecast["Type"] = "Forecast"
+        
+        # Plotting logic
+        st.line_chart(df_forecast.set_index("timestamp")["pm10"])
+        st.caption("The graph predicts Lucknow's PM10 levels for the next 24 hours using the NSS-Net SRI loop.")
     else:
         st.info("Collect more historical data to enable forecasting.")
     # --------------------------------------------------
