@@ -139,31 +139,41 @@ def fetch_pm10_data():
 # --------------------------------------------------
 # LOOCV DIAGNOSTICS
 # --------------------------------------------------
+from sklearn.model_selection import KFold
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+
 def run_diagnostics(df):
-    preds = []
     features = ["lat", "lon", "temp", "hum", "wind"]
 
-    for i in range(len(df)):
-        train = df.drop(i)
-        test = df.iloc[i]
+    X = df[features].values
+    y = df["pm10"].values
 
-        rf = RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42)
-        rf.fit(train[features], train["pm10"])
-        residuals = train["pm10"] - rf.predict(train[features])
-       
-        try:
-            ok = OrdinaryKriging(train.lon, train.lat, residuals, variogram_model="gaussian")
-            r, _ = ok.execute("points", [test.lon], [test.lat])
-            pred = rf.predict(test[features].values.reshape(1, -1))[0] + r[0]
-        except:
-            pred = rf.predict([test[features]])[0]
+    kf = KFold(n_splits=min(5, len(df)), shuffle=True, random_state=42)
 
-        preds.append({"Actual": test.pm10, "Predicted": pred})
-    
-    res = pd.DataFrame(preds)
-    mae = np.mean(np.abs(res["Actual"] - res["Predicted"]))
-    rmse = np.sqrt(np.mean((res["Actual"] - res["Predicted"])**2))
-    return res, mae, rmse
+    preds = []
+    actuals = []
+
+    for train_idx, test_idx in kf.split(X):
+        rf = RandomForestRegressor(
+            n_estimators=300,
+            max_depth=None,
+            min_samples_leaf=1,
+            random_state=42
+        )
+
+        rf.fit(X[train_idx], y[train_idx])
+        y_pred = rf.predict(X[test_idx])
+
+        preds.extend(y_pred)
+        actuals.extend(y[test_idx])
+
+    r2 = r2_score(actuals, preds)
+    mae = mean_absolute_error(actuals, preds)
+    rmse = np.sqrt(mean_squared_error(actuals, preds))
+
+    res = pd.DataFrame({"Actual": actuals, "Predicted": preds})
+
+    return res, mae, rmse, r2
 
 # --------------------------------------------------
 # UI HEADER
@@ -231,10 +241,24 @@ if run_hybrid or run_diag or predict_custom:
 
     if run_diag:
         st.subheader("📊 Model Diagnostics")
-        res, mae, rmse = run_diagnostics(df_live)
 
-        from sklearn.metrics import r2_score
-        r2 = r2_score(res["Actual"], res["Predicted"])
+        res, mae, rmse, r2 = run_diagnostics(df_live)
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            fig, ax = plt.subplots()
+            sns.regplot(data=res, x="Actual", y="Predicted", ax=ax)
+            st.pyplot(fig)
+
+            st.metric("MAE", f"{mae:.2f} µg/m³")
+            st.metric("RMSE", f"{rmse:.2f} µg/m³")
+            st.metric("R²", f"{r2:.3f}")
+
+        with c2:
+            fig, ax = plt.subplots()
+            sns.histplot(df_live["pm10"], kde=True, ax=ax)
+            st.pyplot(fig)
 
         c1, c2 = st.columns(2)
 
