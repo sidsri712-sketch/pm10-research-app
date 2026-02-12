@@ -56,15 +56,7 @@ st_autorefresh(interval=1800000, key="refresh")
 # --------------------------------------------------
 # THINGSPEAK FETCH (New Feature)
 # --------------------------------------------------
-def fetch_thingspeak_data():
-    try:
-        url = f"https://api.thingspeak.com/channels/{TS_CHANNEL_ID}/feeds.json?api_key={TS_READ_KEY}&results=1"
-        r = requests.get(url, timeout=5).json()
-        if "feeds" in r and len(r["feeds"]) > 0:
-            return r["feeds"][-1]
-    except:
-        return None
-    return None
+
 
 # --------------------------------------------------
 # WEATHER FETCH (OPEN-METEO)
@@ -119,8 +111,8 @@ def fetch_pm10_data():
                 payload["timestamp"] = payload["timestamp"].astype(str)
                 payload_dict = payload.to_dict(orient="records")
                 requests.post(GOOGLE_SHEET_SEND_URL, data=json.dumps(payload_dict))
-            except:
-                pass 
+            except Exception as e:
+                st.sidebar.warning(f"Cloud sync failed: {e}")
             
             return df_live.groupby(["lat", "lon"]).agg({
                 "pm10": "mean", "name": "first", "temp": "first", "hum": "first", "wind": "first"
@@ -237,7 +229,11 @@ if run_hybrid or run_diag or predict_custom:
             st.pyplot(fig)
 
     # TRAINING DATA
-    df_train = pd.read_csv(DB_FILE)
+    df_train = df_history.copy()
+    if df_train.empty:
+        st.warning("not enough historical cloud data for training.")
+        st.stop()
+        
     df_train["timestamp"] = pd.to_datetime(df_train["timestamp"])
     df_train["hour"] = df_train["timestamp"].dt.hour
     df_train["dayofweek"] = df_train["timestamp"].dt.dayofweek
