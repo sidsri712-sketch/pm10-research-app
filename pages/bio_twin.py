@@ -1,3 +1,7 @@
+# Save this file inside pages/ as: carbon_page.py
+
+# This is a COMPLETE, ready-to-run Streamlit multipage file.
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,6 +12,8 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import LeaveOneOut
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
+# ================= CONFIG =================
+
 WAQI_TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
 TOMTOM_TOKEN = "q77q91PQ9UHNRHmDLnrrN9SWe7LoT8ue"
 NASA_TOKEN = "eyJ0eXAiOiJKV1QiLCJvcmlnaW4iOiJFYXJ0aGRhdGEgTG9naW4iLCJzaWciOiJlZGxqd3RwdWJrZXlfb3BzIiwiYWxnIjoiUlMyNTYifQ"
@@ -17,6 +23,8 @@ LUCKNOW_CENTER = (26.85, 80.94)
 
 CEA_WEIGHTED_AVG = 0.710
 CEA_COMBINED_MARGIN = 0.736
+
+# ================= DATA FUNCTIONS =================
 
 def fetch_weather():
 try:
@@ -100,6 +108,8 @@ return pd.DataFrame(
 }
 )
 
+# ================= MODEL =================
+
 def train_model(X, y):
 poly = PolynomialFeatures(degree=2, include_bias=False)
 X_poly = poly.fit_transform(X)
@@ -109,9 +119,17 @@ model = HistGradientBoostingRegressor(max_depth=6, max_iter=250, random_state=42
 model.fit(X_scaled, y)
 return model, scaler, poly
 
+# ================= UI =================
+
 st.sidebar.header("CDM Emission Factor Configuration")
-project_type = st.sidebar.selectbox("Project Type", ["Small-Scale (AMS-I.D)", "Large-Scale (ACM0002)"])
-manual_override = st.sidebar.selectbox("Manual Override", ["Automatic", "Weighted Average", "Combined Margin"])
+project_type = st.sidebar.selectbox(
+"Project Type",
+["Small-Scale (AMS-I.D)", "Large-Scale (ACM0002)"],
+)
+manual_override = st.sidebar.selectbox(
+"Manual Override",
+["Automatic", "Weighted Average", "Combined Margin"],
+)
 
 if manual_override == "Weighted Average":
 selected_factor = CEA_WEIGHTED_AVG
@@ -122,31 +140,40 @@ selected_factor = CEA_WEIGHTED_AVG if project_type == "Small-Scale (AMS-I.D)" el
 
 st.title("Urban Carbon Intelligence System")
 
+# ================= EXECUTION =================
+
 if st.button("Run Full Model"):
+
+```
 weather = fetch_weather()
 traffic_speed = fetch_traffic()
 night_light = fetch_nasa()
 df = fetch_waqi(weather)
 
-```
 now = pd.Timestamp.now()
 df["hour"] = now.hour
 df["month"] = now.month
 df["traffic_speed"] = traffic_speed
 df["night_light"] = night_light
 
-features = ["lat", "lon", "hour", "month", "temp", "hum", "wind", "traffic_speed", "night_light"]
+features = [
+    "lat", "lon", "hour", "month",
+    "temp", "hum", "wind",
+    "traffic_speed", "night_light"
+]
 
 model, scaler, poly = train_model(df[features], df["pm10"])
 
 loo = LeaveOneOut()
-preds, actuals = [], []
+preds = []
+actuals = []
 
 for train_idx, test_idx in loo.split(df):
     X_tr = df.iloc[train_idx][features]
     y_tr = df.iloc[train_idx]["pm10"]
     X_te = df.iloc[test_idx][features]
     y_te = df.iloc[test_idx]["pm10"]
+
     m, sc, p = train_model(X_tr, y_tr)
     pred = m.predict(sc.transform(p.transform(X_te)))[0]
     preds.append(pred)
