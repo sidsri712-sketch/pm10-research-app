@@ -70,7 +70,11 @@ return 30
 def fetch_nasa():
 try:
 headers = {"Authorization": f"Bearer {NASA_TOKEN}"}
-r = requests.get("[https://urs.earthdata.nasa.gov/profile](https://urs.earthdata.nasa.gov/profile)", headers=headers, timeout=10)
+r = requests.get(
+"[https://urs.earthdata.nasa.gov/profile](https://urs.earthdata.nasa.gov/profile)",
+headers=headers,
+timeout=10,
+)
 if r.status_code == 200:
 return 55
 return 50
@@ -103,7 +107,7 @@ data = r.json()
 
     df = pd.DataFrame(rows)
     if len(df) < 5:
-        raise Exception("Insufficient WAQI stations")
+        raise ValueError("Insufficient WAQI stations")
 
     return df
 
@@ -181,13 +185,12 @@ st.title("Urban Carbon Intelligence System")
 # ======================================================
 
 if st.button("Run Full Model"):
-
-```
 weather = fetch_weather()
 traffic_speed = fetch_traffic()
 night_light = fetch_nasa()
 df = fetch_waqi(weather)
 
+```
 now = pd.Timestamp.now()
 df["hour"] = now.hour
 df["month"] = now.month
