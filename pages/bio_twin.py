@@ -67,8 +67,24 @@ daily_ev_cost = (ev_count * avg_daily_km * EV_ENERGY_USAGE_KWH_KM) * ELECTRICITY
 annual_fuel_savings_lakhs = ((daily_diesel_cost - daily_ev_cost) * 365) / 100000
 
 # 3. Final Calculations
+# 3. Final Calculations (Updated for Maintenance & Carbon)
+# Assuming diesel maintenance is ~₹4/km for small trucks (2026 estimate)
+annual_diesel_maint = (ev_count * avg_daily_km * 365 * 4) / 100000
+annual_maint_savings_lakhs = annual_diesel_maint * MAINTENANCE_SAVING_EV_PCT
+
+# Carbon Offset Calculation
+# Solar saving grid emissions + EV replacing diesel tailpipe (0.15kg CO2/km)
+annual_co2_saved_tons = (annual_solar_gen * GRID_EF_KG_KWH / 1000) + \
+                        (ev_count * avg_daily_km * 365 * 0.15 / 1000)
+carbon_credit_revenue_lakhs = (annual_co2_saved_tons * icm_rate) / 100000
+
+# Aggregated Financials
 total_net_investment = net_solar_investment + net_ev_investment
-total_annual_savings = annual_solar_savings_lakhs + annual_fuel_savings_lakhs
+total_annual_savings = (annual_solar_savings_lakhs + 
+                        annual_fuel_savings_lakhs + 
+                        annual_maint_savings_lakhs + 
+                        carbon_credit_revenue_lakhs)
+
 payback_years = total_net_investment / total_annual_savings if total_annual_savings > 0 else 0
 
 # ================= 📊 DASHBOARD DISPLAY =================
@@ -108,16 +124,16 @@ with col_plot:
 
 with col_table:
     st.write("#### 💸 Savings Breakdown")
-    savings_df = pd.DataFrame({
+    savings_data = {
         "Source": ["Electricity (Solar)", "Fuel (EV)", "Maintenance", "Carbon Credits"],
         "Annual (Lakhs)": [
             f"₹{annual_solar_savings_lakhs:.1f} L",
-            f"₹{annual_fuel_savings_lakhs * 0.8:.1f} L",
-            f"₹{annual_fuel_savings_lakhs * 0.2:.1f} L",
-            f"₹{(total_net_investment * 0.02):.1f} L" # Est carbon credit value
+            f"₹{annual_fuel_savings_lakhs:.1f} L",
+            f"₹{annual_maint_savings_lakhs:.1f} L",
+            f"₹{carbon_credit_revenue_lakhs:.1f} L"
         ]
-    })
-    st.table(savings_df)
+    }
+    st.table(pd.DataFrame(savings_data))
 
 st.divider()
 
