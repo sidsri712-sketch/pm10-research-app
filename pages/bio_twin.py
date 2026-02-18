@@ -11,10 +11,13 @@ INDIA_GRID_EF_2026 = 0.548
 # Expected Indian Carbon Market (ICM) rate per ton of CO2
 ICM_RATE_INR = 1850  
 
+# Parameterized Emission & System Constants
+EV_DIESEL_EMISSION_FACTOR = 0.30   # kg CO2 per km (Heavy-duty realistic factor)
+SOLAR_PERFORMANCE_RATIO = 0.78     # System derating factor
+
 # Your Active API Keys
 WAQI_TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
 TOMTOM_TOKEN = "q77q91PQ9UHNRHmDLnrrN9SWe7LoT8ue"
-# NASA POWER API uses a public endpoint, Token used for headers if required
 NASA_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 
 # Lucknow Geographic Center
@@ -36,36 +39,44 @@ def fetch_nasa_solar():
             "end": today,
             "format": "JSON"
         }
-        r = requests.get(NASA_URL, params=params, timeout=5).json()
-        # Returns kWh/m^2/day (avg is ~4.5 in UP)
+        r = requests.get(NASA_URL, params=params, timeout=5)
+        r.raise_for_status()
+        r = r.json()
         return r['properties']['parameter']['ALLSKY_SFC_SW_DWN'][today]
-    except: return 4.5
+    except Exception as e:
+        st.warning(f"NASA API fallback: {e}")
+        return 4.5
 
 def fetch_tomtom_traffic():
     """Fetches live speed data to calculate 'Idling Penalty' for Diesel"""
     try:
         url = f"https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json?point={LUCKNOW_LAT},{LUCKNOW_LON}&key={TOMTOM_TOKEN}"
-        r = requests.get(url, timeout=5).json()
+        r = requests.get(url, timeout=5)
+        r.raise_for_status()
+        r = r.json()
         return r.get("flowSegmentData", {}).get("currentSpeed", 25)
-    except: return 25
+    except Exception as e:
+        st.warning(f"TomTom API fallback: {e}")
+        return 25
 
 def fetch_waqi_data():
     try:
         url = f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={WAQI_TOKEN}"
-        data = requests.get(url, timeout=5).json()
+        r = requests.get(url, timeout=5)
+        r.raise_for_status()
+        data = r.json()
         if data.get("status") == "ok":
             df = pd.DataFrame([{"lat": s["lat"], "lon": s["lon"], "aqi": s["aqi"]} for s in data["data"]])
-            # Ensure AQI is numeric immediately
             df["aqi"] = pd.to_numeric(df["aqi"], errors='coerce')
-            return df.dropna(subset=["aqi"]) # Optional: remove rows with invalid AQI
-    except: pass
+            return df.dropna(subset=["aqi"])
+    except Exception as e:
+        st.warning(f"WAQI API fallback: {e}")
     return pd.DataFrame({"lat": [26.85], "lon": [80.94], "aqi": [150.0]})
 
 # ================= 🖥️ STREAMLIT UI & LOGIC =================
 
 st.set_page_config(page_title="Synaptic Rig: Lucknow 2026", layout="wide")
 
-# --- Sidebar: Assets ---
 with st.sidebar:
     st.header("🏗️ Urban Asset Inventory")
     ev_count = st.slider("Fleet Size (EV Trucks)", 10, 500, 50)
@@ -76,39 +87,39 @@ with st.sidebar:
     if st.button("🔄 Sync Live Data"):
         st.rerun()
 
-# --- Logic: Integrated ROI Engine ---
-# --- Logic: Integrated ROI Engine (WITH PERSISTENCE) ---
-# Initialize session state so data doesn't vanish on reruns
 if 'live_data' not in st.session_state:
     st.session_state.live_solar = fetch_nasa_solar()
     st.session_state.live_speed = fetch_tomtom_traffic()
     st.session_state.aqi_df = fetch_waqi_data()
 
-# Trigger data update only when button is pressed
 if st.sidebar.button("🔄 Force Refresh API Data"):
     st.session_state.live_solar = fetch_nasa_solar()
     st.session_state.live_speed = fetch_tomtom_traffic()
     st.session_state.aqi_df = fetch_waqi_data()
     st.rerun()
 
-# Use the stored data for calculations
 live_solar_yield = st.session_state.live_solar
 live_traffic_speed = st.session_state.live_speed
 aqi_df = st.session_state.aqi_df
 
-# Calculations (Remains the same but now stable)
-traffic_penalty = 0.7 if live_traffic_speed < 15 else 1.0
-diesel_eff = 3.5 * traffic_penalty
+# Improved Diesel Efficiency Model (speed-dependent nonlinear degradation)
+diesel_eff = 3.5 * (0.6 + 0.4 * (live_traffic_speed / 40))
+diesel_eff = max(diesel_eff, 1.8)  # Physical lower bound
+
 annual_fuel_saved_lakhs = (((ev_count * avg_daily_km / diesel_eff) * 92.5) * 365) / 100000
-annual_solar_gen = solar_capacity * live_solar_yield * 330
+
+# Solar with performance ratio
+annual_solar_gen = solar_capacity * live_solar_yield * 330 * SOLAR_PERFORMANCE_RATIO
 annual_solar_savings_lakhs = (annual_solar_gen * 8.5) / 100000
+
 miyawaki_sequestration = miyawaki_kits * 0.5 
+
 annual_co2_saved = (annual_solar_gen * INDIA_GRID_EF_2026 / 1000) + \
-                   (ev_count * avg_daily_km * 365 * 0.15 / 1000) + \
+                   (ev_count * avg_daily_km * 365 * EV_DIESEL_EMISSION_FACTOR / 1000) + \
                    miyawaki_sequestration
+
 carbon_revenue_lakhs = (annual_co2_saved * ICM_RATE_INR) / 100000
 
-# Phase 1: High-Level Metrics
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Carbon Saved", f"{annual_co2_saved:.1f} tCO2/yr", delta="Target: Net-Zero")
 m2.metric("Total Annual Savings", f"₹{(annual_fuel_saved_lakhs + annual_solar_savings_lakhs + carbon_revenue_lakhs):.1f} L")
@@ -117,28 +128,23 @@ m4.metric("Live AQI", f"{aqi_df['aqi'].mean():.0f}", delta="-15% vs Diesel Basel
 
 st.divider()
 
-# Phase 2: Spatial & Asset Analysis
 import folium
 from streamlit_folium import st_folium
 
-# --- In Phase 2: Spatial & Asset Analysis ---
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
     st.subheader("📍 Interactive Air Quality Basemap")
-    
-    # Initialize Folium Map centered on Lucknow
-    # Basemap options: "OpenStreetMap", "CartoDB Positron" (clean), "CartoDB Dark_Matter"
     m = folium.Map(location=[LUCKNOW_LAT, LUCKNOW_LON], zoom_start=12, tiles="CartoDB Positron")
 
-    # Add Circle Markers for each AQI data point
+    aqi_min, aqi_max = aqi_df['aqi'].min(), aqi_df['aqi'].max()
     for _, row in aqi_df.iterrows():
-        # Determine color based on AQI severity
+        normalized_radius = 5 + 15 * ((row['aqi'] - aqi_min) / (aqi_max - aqi_min + 1e-6))
         color = "green" if row['aqi'] < 50 else "orange" if row['aqi'] < 100 else "red"
-        
+
         folium.CircleMarker(
             location=[row["lat"], row["lon"]],
-            radius=row["aqi"] / 10,  # Size proportional to pollution
+            radius=normalized_radius,
             color=color,
             fill=True,
             fill_color=color,
@@ -147,11 +153,8 @@ with col_left:
             tooltip="Click for details"
         ).add_to(m)
 
-    # Render the map in Streamlit
-    # Render with a unique key to prevent the map from resetting the app state
     st_folium(m, width=800, height=450, key="lucknow_basemap")
 
-# Phase 3: Financial Breakdown
 st.subheader("📋 2026 Financial Audit (Lakhs INR)")
 audit_data = {
     "Source": ["EV Fuel Replacement", "Solar Generation", "Miyawaki Offsets", "Carbon Credit Trading (ICM)"],
