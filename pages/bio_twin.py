@@ -157,8 +157,15 @@ with col_left:
 
     st_folium(m, width=800, height=450, key="lucknow_basemap")
 # ================= 🧠 ML INTELLIGENCE ENGINE =================
+# ================= 🧠 ML INTELLIGENCE ENGINE =================
+
+# Safe default initialization (prevents NameError)
+ml_predicted_co2 = annual_co2_saved
 
 if "ml_model" not in st.session_state:
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.preprocessing import StandardScaler
+
     st.session_state.ml_model = RandomForestRegressor(
         n_estimators=120,
         max_depth=6,
@@ -190,12 +197,8 @@ if len(st.session_state.training_X) > 5:
     X_scaled = st.session_state.scaler.fit_transform(X)
     st.session_state.ml_model.fit(X_scaled, y)
 
-    # Intelligent prediction
     current_scaled = st.session_state.scaler.transform([current_features])
     ml_predicted_co2 = st.session_state.ml_model.predict(current_scaled)[0]
-else:
-    ml_predicted_co2 = annual_co2_saved
-st.subheader("📋 2026 Financial Audit (Lakhs INR)")
 audit_data = {
     "Source": ["EV Fuel Replacement", "Solar Generation", "Miyawaki Offsets", "Carbon Credit Trading (ICM)"],
     "Annual Gain": [f"₹{annual_fuel_saved_lakhs:.1f} L", f"₹{annual_solar_savings_lakhs:.1f} L", "Benefit-in-kind", f"₹{carbon_revenue_lakhs:.1f} L"]
