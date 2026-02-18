@@ -122,42 +122,7 @@ annual_co2_saved = (annual_solar_gen * INDIA_GRID_EF_2026 / 1000) + \
 
 carbon_revenue_lakhs = (annual_co2_saved * ICM_RATE_INR) / 100000
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Carbon Saved", f"{annual_co2_saved:.1f} tCO2/yr", delta="Target: Net-Zero")
-m2.metric("Total Annual Savings", f"₹{(annual_fuel_saved_lakhs + annual_solar_savings_lakhs + carbon_revenue_lakhs):.1f} L")
-m3.metric("ICM Market Value", f"₹{carbon_revenue_lakhs:.2f} L", help="Revenue from Indian Carbon Market")
-m4.metric("Live AQI", f"{aqi_df['aqi'].mean():.0f}", delta="-15% vs Diesel Baseline", delta_color="inverse")
-m1.metric("AI Predicted Carbon", f"{ml_predicted_co2:.1f} tCO2/yr")
-st.divider()
-
-import folium
-from streamlit_folium import st_folium
-
-col_left, col_right = st.columns([2, 1])
-
-with col_left:
-    st.subheader("📍 Interactive Air Quality Basemap")
-    m = folium.Map(location=[LUCKNOW_LAT, LUCKNOW_LON], zoom_start=12, tiles="CartoDB Positron")
-
-    aqi_min, aqi_max = aqi_df['aqi'].min(), aqi_df['aqi'].max()
-    for _, row in aqi_df.iterrows():
-        normalized_radius = 5 + 15 * ((row['aqi'] - aqi_min) / (aqi_max - aqi_min + 1e-6))
-        color = "green" if row['aqi'] < 50 else "orange" if row['aqi'] < 100 else "red"
-
-        folium.CircleMarker(
-            location=[row["lat"], row["lon"]],
-            radius=normalized_radius,
-            color=color,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.6,
-            popup=f"AQI: {row['aqi']:.0f}",
-            tooltip="Click for details"
-        ).add_to(m)
-
-    st_folium(m, width=800, height=450, key="lucknow_basemap")
-# ================= 🧠 ML INTELLIGENCE ENGINE =================
-# ================= 🧠 ML INTELLIGENCE ENGINE =================
+# ================= 🧠 ML INTELLIGENCE ENGINE (MOVED UP) =================
 
 # Safe default initialization (prevents NameError)
 ml_predicted_co2 = annual_co2_saved
@@ -199,6 +164,44 @@ if len(st.session_state.training_X) > 5:
 
     current_scaled = st.session_state.scaler.transform([current_features])
     ml_predicted_co2 = st.session_state.ml_model.predict(current_scaled)[0]
+
+# ================= 📊 METRICS DISPLAY =================
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Carbon Saved", f"{annual_co2_saved:.1f} tCO2/yr", delta="Target: Net-Zero")
+m2.metric("Total Annual Savings", f"₹{(annual_fuel_saved_lakhs + annual_solar_savings_lakhs + carbon_revenue_lakhs):.1f} L")
+m3.metric("ICM Market Value", f"₹{carbon_revenue_lakhs:.2f} L", help="Revenue from Indian Carbon Market")
+m4.metric("Live AQI", f"{aqi_df['aqi'].mean():.0f}", delta="-15% vs Diesel Baseline", delta_color="inverse")
+m1.metric("AI Predicted Carbon", f"{ml_predicted_co2:.1f} tCO2/yr")
+st.divider()
+
+import folium
+from streamlit_folium import st_folium
+
+col_left, col_right = st.columns([2, 1])
+
+with col_left:
+    st.subheader("📍 Interactive Air Quality Basemap")
+    m = folium.Map(location=[LUCKNOW_LAT, LUCKNOW_LON], zoom_start=12, tiles="CartoDB Positron")
+
+    aqi_min, aqi_max = aqi_df['aqi'].min(), aqi_df['aqi'].max()
+    for _, row in aqi_df.iterrows():
+        normalized_radius = 5 + 15 * ((row['aqi'] - aqi_min) / (aqi_max - aqi_min + 1e-6))
+        color = "green" if row['aqi'] < 50 else "orange" if row['aqi'] < 100 else "red"
+
+        folium.CircleMarker(
+            location=[row["lat"], row["lon"]],
+            radius=normalized_radius,
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.6,
+            popup=f"AQI: {row['aqi']:.0f}",
+            tooltip="Click for details"
+        ).add_to(m)
+
+    st_folium(m, width=800, height=450, key="lucknow_basemap")
+
 audit_data = {
     "Source": ["EV Fuel Replacement", "Solar Generation", "Miyawaki Offsets", "Carbon Credit Trading (ICM)"],
     "Annual Gain": [f"₹{annual_fuel_saved_lakhs:.1f} L", f"₹{annual_solar_savings_lakhs:.1f} L", "Benefit-in-kind", f"₹{carbon_revenue_lakhs:.1f} L"]
