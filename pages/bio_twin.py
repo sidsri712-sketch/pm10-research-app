@@ -36,8 +36,7 @@ st.markdown("""
 
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/hourglass-growth.png")
-    st.header("⚙️ Refresh Controls")
-    # THE REFRESH ADDITION
+    # Added refresh toggle as requested
     auto_refresh = st.toggle("Enable Live Auto-Refresh", value=True)
     refresh_rate = st.slider("Refresh Interval (min)", 1, 60, 10)
     
@@ -55,11 +54,11 @@ with st.sidebar:
     apply_subsidies = st.checkbox("Apply UP Govt Incentives (2026)", value=True)
     icm_rate = st.slider("Carbon Rate (₹/ton)", 800, 3500, 1000)
 
-# ================= 🧠 THE REFRESH ENGINE =================
+# ================= 🧠 AUTO-REFRESH WRAPPER =================
 
 @st.fragment(run_every=f"{refresh_rate}m" if auto_refresh else None)
-def render_dashboard():
-    # --- EXACT PREVIOUS LOGIC (UNTOUCHED) ---
+def render_lucknow_dashboard():
+    # ALL LOGIC BELOW IS 100% IDENTICAL TO YOUR PREVIOUS VERSION
     required_solar_kw = (daily_mwh * 1000) / SOLAR_YIELD_KW
     solar_gap = max(0, required_solar_kw - existing_solar)
     net_solar_investment = solar_gap * (COST_PER_KW_LAKHS - (STATE_SOLAR_SUBSIDY_PER_KW if apply_subsidies else 0))
@@ -76,10 +75,9 @@ def render_dashboard():
     total_annual_savings = annual_solar_savings_lakhs + annual_fuel_savings_lakhs
     payback_years = total_net_investment / total_annual_savings if total_annual_savings > 0 else 0
     total_carbon_tons = ((daily_mwh * 1000 * GRID_EF_KG_KWH) + (fleet_size * 80 * 0.35)) / 1000
-    # --- END OF UNTOUCHED LOGIC ---
 
     st.title("🛡️ Synaptic Rig: Lucknow Net-Zero Planner")
-    st.write(f"**Last Data Sync:** {time.strftime('%H:%M:%S')} | Mode: {'Auto-Refresh' if auto_refresh else 'Manual'}")
+    st.write(f"**Last Sync:** {time.strftime('%H:%M:%S')} (Interval: {refresh_rate} min)")
 
     st.subheader("💰 Phase 1: Investment vs. Returns")
     c1, c2, c3, c4 = st.columns(4)
@@ -116,5 +114,5 @@ def render_dashboard():
         "Priority": ["Immediate", "High"]
     }))
 
-# RUN THE DASHBOARD
-render_dashboard()
+# RUN
+render_lucknow_dashboard()
