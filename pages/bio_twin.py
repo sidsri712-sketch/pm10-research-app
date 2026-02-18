@@ -7,139 +7,95 @@ import requests
 import matplotlib.pyplot as plt
 
 # ================= INDIA-SPECIFIC CONFIG =================
-# CEA (Central Electricity Authority) Grid Emission Factor for India (approx 0.71 - 0.73)
-INDIA_GRID_EF = 0.71 
-# Estimated price in the Indian Carbon Market (ICM) per ton of CO2
-ICM_PRICE_INR = 1500  
+INDIA_GRID_EF = 0.71  # kg CO2 per kWh (CEA Standard)
+SOLAR_YIELD_KW = 4.0  # Avg daily kWh per 1kW solar in India
+COST_PER_KW_INR = 55000  # Avg installation cost (₹55,000 per kW)
 
 WAQI_TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
-TOMTOM_TOKEN = "q77q91PQ9UHNRHmDLnrrN9SWe7LoT8ue"
-NASA_TOKEN = "eyJ0eXAiOiJKV1QiLCJvcmlnaW4iOiJFYXJ0aGRhdGEgTG9naW4iLCJzaWciOiJlZGxqd3RwdWJrZXlfb3BzIiwiYWxnIjoiUlMyNTYifQ"
-
 LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
-LUCKNOW_CENTER = (26.85, 80.94)
 
-# ================= UTILITY FUNCTIONS =================
+# ================= DATA FETCH =================
 
-def fetch_weather():
-    try:
-        url = "https://api.open-meteo.com/v1/forecast?latitude=26.85&longitude=80.94&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m&forecast_days=1&timezone=Asia%2FKolkata"
-        r = requests.get(url, timeout=10).json()
-        return {"temp": r["hourly"]["temperature_2m"][0], "hum": r["hourly"]["relative_humidity_2m"][0], "wind": r["hourly"]["wind_speed_10m"][0]}
-    except: return {"temp": 30, "hum": 60, "wind": 5}
-
-def fetch_traffic():
-    try:
-        url = f"https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json?point={LUCKNOW_CENTER[0]},{LUCKNOW_CENTER[1]}&key={TOMTOM_TOKEN}"
-        r = requests.get(url, timeout=10).json()
-        return r.get("flowSegmentData", {}).get("currentSpeed", 25)
-    except: return 25
-
-def fetch_waqi(weather):
+def fetch_waqi():
     try:
         url = f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={WAQI_TOKEN}"
         data = requests.get(url, timeout=10).json()
-        rows = []
         if data.get("status") == "ok":
-            for s in data.get("data", []):
-                rows.append({"lat": s["lat"], "lon": s["lon"], "pm10": s.get("aqi", np.random.uniform(100, 250)), **weather})
-            df = pd.DataFrame(rows)
+            df = pd.DataFrame([{"pm10": s.get("aqi", 150)} for s in data.get("data", [])])
             df["pm10"] = pd.to_numeric(df["pm10"], errors='coerce')
-            return df.dropna(subset=["pm10"])
+            return df["pm10"].mean()
     except: pass
-    return pd.DataFrame({"lat": np.random.uniform(26.75, 26.95, 8), "lon": np.random.uniform(80.85, 81.05, 8), "pm10": np.random.uniform(100, 250, 8), **weather})
+    return 150.0
 
 # ================= APP INTERFACE =================
 
-st.set_page_config(page_title="India Carbon Intelligence", layout="wide")
+st.set_page_config(page_title="Lucknow Net-Zero Planner", layout="wide")
 
-# Sidebar for Indian Context Asset Management
-st.sidebar.header("🇮🇳 India Asset Inventory")
-miyawaki_kits = st.sidebar.number_input("Miyawaki Forest Kits", value=50)
-ev_chargers = st.sidebar.number_input("Public EV Chargers", value=100)
+st.title("🇮🇳 Lucknow Net-Zero Budget Planner")
+st.markdown("### Carbon-to-Solar Conversion & Financial Estimator")
+
+# Sidebar: Inventory & Budget Settings
+st.sidebar.header("🏢 Current Assets")
+available_solar = st.sidebar.number_input("Solar Already Installed (kW)", value=100)
 st.sidebar.divider()
-st.sidebar.write("**Financial Context**")
-current_rate = st.sidebar.slider("ICM Carbon Rate (₹/tCO2)", 500, 5000, 1500)
+st.sidebar.header("💰 Budget Settings")
+solar_rate = st.sidebar.slider("Cost per kW (₹)", 40000, 70000, 55000)
 
-st.title("Synaptic Rig: India Carbon Footprint Monitor")
-st.markdown("#### Urban Combustion Field Analysis: Lucknow Metro Region")
+if st.button("📊 Calculate Net-Zero Requirements"):
+    with st.spinner("Analyzing Urban Combustion Field..."):
+        # 1. Monitoring
+        avg_aqi = fetch_waqi()
+        
+        # Simplified Logic: 1 AQI unit proxy for 15kWh daily urban energy footprint
+        daily_kwh = avg_aqi * 15 
+        daily_carbon_kg = daily_kwh * INDIA_GRID_EF
+        
+        # 2. Solar Math
+        required_kw = daily_kwh / SOLAR_YIELD_KW
+        gap_kw = max(0, required_kw - available_solar)
+        total_cost_inr = gap_kw * solar_rate
+        cost_in_lakhs = total_cost_inr / 100000
 
-if st.button("🇮🇳 Sync with India Carbon Market"):
-    with st.spinner("Analyzing National Grid Data..."):
-        # 1. Data Fetch
-        weather = fetch_weather()
-        traffic_speed = fetch_traffic()
-        df = fetch_waqi(weather)
-        
-        # 2. Indian Footprint Reconstruction
-        # Higher pollution baseline for Indian urban centers
-        avg_pm = np.mean(df["pm10"])
-        total_energy_mwh = (avg_pm / 1000.0) * 1.5 
-        total_carbon = total_energy_mwh * INDIA_GRID_EF
-        liability_inr = total_carbon * current_rate
-        
-        # 3. INDIA-CENTRIC METRICS
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Current Footprint", f"{total_carbon:.3f} tCO2")
-        m2.metric("Market Liability", f"₹{liability_inr:,.0f}")
-        m3.metric("CEA Grid Factor", f"{INDIA_GRID_EF}")
-        m4.metric("Avg AQI (PM10)", f"{avg_pm:.0f}")
-        
+        # DISPLAY RESULTS
+        st.subheader("📍 Current Environment & Footprint")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Avg PM10 (Lucknow)", f"{avg_aqi:.0f} µg/m³")
+        c2.metric("Daily Carbon Produced", f"{daily_carbon_kg:.1f} kg")
+        c3.metric("Energy Footprint", f"{daily_kwh:.1f} kWh/day")
+
         st.divider()
+
+        st.subheader("🔋 Solar Inventory & Financial Plan")
+        f1, f2, f3 = st.columns(3)
         
-        # 4. SPATIAL & INVENTORY ANALYSIS
-        col_map, col_inv = st.columns([2, 1])
+        f1.metric("Solar Gap", f"{gap_kw:.1f} kW")
+        f2.metric("Investment Required", f"₹{cost_in_lakhs:.2f} Lakhs")
         
-        with col_map:
-            st.subheader("Spatial Combustion Intensity")
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.set_facecolor("#fdfdfd")
-            scat = ax.scatter(df["lon"], df["lat"], c=df["pm10"], s=df["pm10"]*4, cmap='YlOrBr', alpha=0.9, edgecolors="grey")
-            plt.colorbar(scat, label="PM10 Concentration")
+        # Financial Health Status
+        if gap_kw <= 0:
+            f3.success("Status: NET ZERO ACHIEVED")
+        else:
+            f3.error("Status: CARBON POSITIVE")
+
+        # 3. USEFUL VISUALS
+        v1, v2 = st.columns(2)
+        with v1:
+            st.write("**Solar Asset Gap Analysis**")
+            fig, ax = plt.subplots()
+            ax.pie([available_solar, gap_kw], labels=["In Stock", "Required"], 
+                   autopct='%1.1f%%', colors=['#2ecc71', '#e74c3c'], startangle=140)
             st.pyplot(fig)
-            
-        with col_inv:
-            st.subheader("Asset Optimization")
-            st.write("**EV Infrastructure Need:**")
-            ev_need = "HIGH" if traffic_speed < 20 else "MODERATE"
-            st.info(f"Priority: {ev_need}")
-            
-            st.write("**Green Belt Deployment:**")
-            green_coverage = (miyawaki_kits / (avg_pm/2)) # Simple proxy for coverage
-            st.progress(min(green_coverage, 1.0), text="Miyawaki Coverage")
-            
-            st.write("**National Target Alignment:**")
-            st.write("Current footprint exceeds Net Zero 2070 glide path by 12%.")
-
-        # 5. USEFUL INVENTORY LOG (India Specific)
-        st.subheader("📋 Policy Log & Local Recommendations")
         
-        log_data = {
-            "Action Item": [
-                "Deploy EV Charging Cluster", 
-                "Initiate Miyawaki Plantation", 
-                "Strict Dust Mitigation"
-            ],
-            "Location Node": [
-                "Hazratganj Transit Hub", 
-                "Gomti Nagar Extension", 
-                "Amausi Industrial Sector"
-            ],
-            "National Mission": [
-                "FAME-II Scheme", 
-                "National Clean Air Programme", 
-                "Green India Mission"
-            ],
-            "Est. Footprint Reduction": ["15% tCO2", "8% tCO2", "12% tCO2"]
-        }
-        st.table(pd.DataFrame(log_data))
+        with v2:
+            st.write("**Quick Decision Log**")
+            plan = {
+                "Priority": ["Immediate", "Medium-Term", "Long-Term"],
+                "Investment": [f"₹{cost_in_lakhs*0.4:.1f} L", f"₹{cost_in_lakhs*0.4:.1f} L", f"₹{cost_in_lakhs*0.2:.1f} L"],
+                "Goal": ["Off-set High Intensity Nodes", "Commercial Rooftop Solar", "Residential Subsidies"]
+            }
+            st.table(pd.DataFrame(plan))
 
-        # 6. EXPORT FOR MUNICIPAL RECORDS
-        st.download_button(
-            label="📥 Download ULB Carbon Audit Report",
-            data=df.to_csv().encode('utf-8'),
-            file_name='india_carbon_audit.csv',
-            mime='text/csv',
-        )
+        # Final Summary
+        st.info(f"**Executive Summary:** To reach Net-Zero today, Lucknow requires an immediate deployment of **{gap_kw:.1f} kW** of solar capacity, necessitating a budget of **₹{cost_in_lakhs:.2f} Lakhs**.")
 
-st.success("System aligned with Indian Ministry of Power & Environment standards.")
+st.success("App live. Adjust the 'Cost per kW' in the sidebar to match current vendor quotes.")
