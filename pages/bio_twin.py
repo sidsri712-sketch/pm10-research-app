@@ -4,6 +4,8 @@ import numpy as np
 import requests
 import matplotlib.pyplot as plt
 from datetime import datetime
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler
 
 # ================= 🌐 2026 INDIA CONFIG & TOKENS =================
 # Projected CEA Grid Emission Factor for 2026-27 (National Electricity Plan)
@@ -125,7 +127,7 @@ m1.metric("Carbon Saved", f"{annual_co2_saved:.1f} tCO2/yr", delta="Target: Net-
 m2.metric("Total Annual Savings", f"₹{(annual_fuel_saved_lakhs + annual_solar_savings_lakhs + carbon_revenue_lakhs):.1f} L")
 m3.metric("ICM Market Value", f"₹{carbon_revenue_lakhs:.2f} L", help="Revenue from Indian Carbon Market")
 m4.metric("Live AQI", f"{aqi_df['aqi'].mean():.0f}", delta="-15% vs Diesel Baseline", delta_color="inverse")
-
+m1.metric("AI Predicted Carbon", f"{ml_predicted_co2:.1f} tCO2/yr")
 st.divider()
 
 import folium
@@ -154,7 +156,45 @@ with col_left:
         ).add_to(m)
 
     st_folium(m, width=800, height=450, key="lucknow_basemap")
+# ================= 🧠 ML INTELLIGENCE ENGINE =================
 
+if "ml_model" not in st.session_state:
+    st.session_state.ml_model = RandomForestRegressor(
+        n_estimators=120,
+        max_depth=6,
+        random_state=42
+    )
+    st.session_state.scaler = StandardScaler()
+    st.session_state.training_X = []
+    st.session_state.training_y = []
+
+# Prepare current feature vector
+current_features = [
+    ev_count,
+    avg_daily_km,
+    solar_capacity,
+    miyawaki_kits,
+    live_solar_yield,
+    live_traffic_speed
+]
+
+# Store historical learning data
+st.session_state.training_X.append(current_features)
+st.session_state.training_y.append(annual_co2_saved)
+
+# Train only after minimum samples
+if len(st.session_state.training_X) > 5:
+    X = np.array(st.session_state.training_X)
+    y = np.array(st.session_state.training_y)
+
+    X_scaled = st.session_state.scaler.fit_transform(X)
+    st.session_state.ml_model.fit(X_scaled, y)
+
+    # Intelligent prediction
+    current_scaled = st.session_state.scaler.transform([current_features])
+    ml_predicted_co2 = st.session_state.ml_model.predict(current_scaled)[0]
+else:
+    ml_predicted_co2 = annual_co2_saved
 st.subheader("📋 2026 Financial Audit (Lakhs INR)")
 audit_data = {
     "Source": ["EV Fuel Replacement", "Solar Generation", "Miyawaki Offsets", "Carbon Credit Trading (ICM)"],
