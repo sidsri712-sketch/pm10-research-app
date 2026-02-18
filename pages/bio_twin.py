@@ -77,32 +77,36 @@ with st.sidebar:
         st.rerun()
 
 # --- Logic: Integrated ROI Engine ---
-live_solar_yield = fetch_nasa_solar()
-live_traffic_speed = fetch_tomtom_traffic()
-aqi_df = fetch_waqi_data()
+# --- Logic: Integrated ROI Engine (WITH PERSISTENCE) ---
+# Initialize session state so data doesn't vanish on reruns
+if 'live_data' not in st.session_state:
+    st.session_state.live_solar = fetch_nasa_solar()
+    st.session_state.live_speed = fetch_tomtom_traffic()
+    st.session_state.aqi_df = fetch_waqi_data()
 
-# 1. Traffic-Adjusted Fuel Savings
-# Lucknow traffic penalty: If speed < 15km/h, diesel efficiency drops 30%
+# Trigger data update only when button is pressed
+if st.sidebar.button("🔄 Force Refresh API Data"):
+    st.session_state.live_solar = fetch_nasa_solar()
+    st.session_state.live_speed = fetch_tomtom_traffic()
+    st.session_state.aqi_df = fetch_waqi_data()
+    st.rerun()
+
+# Use the stored data for calculations
+live_solar_yield = st.session_state.live_solar
+live_traffic_speed = st.session_state.live_speed
+aqi_df = st.session_state.aqi_df
+
+# Calculations (Remains the same but now stable)
 traffic_penalty = 0.7 if live_traffic_speed < 15 else 1.0
 diesel_eff = 3.5 * traffic_penalty
 annual_fuel_saved_lakhs = (((ev_count * avg_daily_km / diesel_eff) * 92.5) * 365) / 100000
-
-# 2. Solar Impact
 annual_solar_gen = solar_capacity * live_solar_yield * 330
 annual_solar_savings_lakhs = (annual_solar_gen * 8.5) / 100000
-
-# 3. Carbon Mitigation (The Complex Part)
-# Grid offset + Tailpipe offset + Miyawaki Sequestration (Miyawaki = 30x normal trees)
-miyawaki_sequestration = miyawaki_kits * 0.5 # ~0.5 tons per kit per year
+miyawaki_sequestration = miyawaki_kits * 0.5 
 annual_co2_saved = (annual_solar_gen * INDIA_GRID_EF_2026 / 1000) + \
                    (ev_count * avg_daily_km * 365 * 0.15 / 1000) + \
                    miyawaki_sequestration
 carbon_revenue_lakhs = (annual_co2_saved * ICM_RATE_INR) / 100000
-
-# ================= 📊 DASHBOARD DISPLAY =================
-
-st.title("🏙️ Lucknow 2026: Net-Zero Command Center")
-st.caption(f"Status: Synchronized with NASA, TomTom & WAQI | Traffic: {live_traffic_speed} km/h | Solar: {live_solar_yield} kWh/m²")
 
 # Phase 1: High-Level Metrics
 m1, m2, m3, m4 = st.columns(4)
@@ -144,7 +148,8 @@ with col_left:
         ).add_to(m)
 
     # Render the map in Streamlit
-    st_folium(m, width=800, height=450)
+    # Render with a unique key to prevent the map from resetting the app state
+    st_folium(m, width=800, height=450, key="lucknow_basemap")
 
 # Phase 3: Financial Breakdown
 st.subheader("📋 2026 Financial Audit (Lakhs INR)")
