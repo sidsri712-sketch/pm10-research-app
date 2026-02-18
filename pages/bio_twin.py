@@ -7,7 +7,6 @@ from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.model_selection import LeaveOneOut
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-import time
 
 # =====================================================
 
@@ -18,33 +17,20 @@ import time
 WAQI_TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
 TOMTOM_TOKEN = "q77q91PQ9UHNRHmDLnrrN9SWe7LoT8ue"
 NASA_TOKEN = "eyJ0eXAiOiJKV1QiLCJvcmlnaW4iOiJFYXJ0aGRhdGEgTG9naW4iLCJzaWciOiJlZGxqd3RwdWJrZXlfb3BzIiwiYWxnIjoiUlMyNTYifQ"
+
 LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
 LUCKNOW_CENTER = (26.85, 80.94)
 
-# CEA CO2 Baseline Database Version 21.0 (FY 2024-25)
-
-# Source: Central Electricity Authority (2025)
-
-# Weighted Average (incl. imports & RES): 0.710 tCO2/MWh
-
-# Operating Margin (OM): 0.961 tCO2/MWh
-
-# Build Margin (BM): 0.512 tCO2/MWh
-
-# Combined Margin (CM, 50:50 OM/BM): 0.736 tCO2/MWh
+# CEA Emission Factors (FY 2024-25)
 
 CEA_WEIGHTED_AVG = 0.710
 CEA_OPERATING_MARGIN = 0.961
 CEA_BUILD_MARGIN = 0.512
 CEA_COMBINED_MARGIN = 0.736
 
-# Default emission factor used in carbon calculation
-
-GRID_EMISSION_FACTOR = CEA_COMBINED_MARGIN
-
 # =====================================================
 
-# INPUT LAYER (FLOWCHART COMPLIANT)
+# INPUT LAYER
 
 # =====================================================
 
@@ -83,12 +69,9 @@ return 30
 def fetch_nasa_nightlights():
 try:
 headers = {"Authorization": "Bearer " + NASA_TOKEN}
-test_url = "[https://urs.earthdata.nasa.gov/profile](https://urs.earthdata.nasa.gov/profile)"
-r = requests.get(test_url, headers=headers, timeout=10)
+r = requests.get("[https://urs.earthdata.nasa.gov/profile](https://urs.earthdata.nasa.gov/profile)", headers=headers, timeout=10)
 if r.status_code == 200:
-# Safe proxy brightness value (avoids heavy raster processing)
 return 55
-else:
 return 50
 except Exception:
 return 50
@@ -125,7 +108,7 @@ return pd.DataFrame({
 
 # =====================================================
 
-# CORE MODEL
+# MODEL
 
 # =====================================================
 
@@ -140,7 +123,7 @@ return model, scaler, poly
 
 # =====================================================
 
-# EMISSION FACTOR SELECTION (CDM LOGIC)
+# CDM EMISSION FACTOR SELECTION
 
 # =====================================================
 
@@ -157,11 +140,9 @@ calculation_mode = st.sidebar.selectbox(
 )
 
 manual_override = st.sidebar.selectbox(
-"Manual Emission Factor Override",
+"Manual Override",
 ["Automatic", "Weighted Average", "Combined Margin"]
 )
-
-# Automatic CDM logic
 
 if manual_override == "Weighted Average":
 selected_emission_factor = CEA_WEIGHTED_AVG
@@ -171,21 +152,18 @@ else:
 if project_type == "Small-Scale (AMS-I.D)":
 selected_emission_factor = CEA_WEIGHTED_AVG
 else:
-# ACM0002 large-scale
 selected_emission_factor = CEA_COMBINED_MARGIN
 
-# Ex-post adjustment example (simple monitoring update factor)
-
 if calculation_mode == "Ex-Post":
-selected_emission_factor = selected_emission_factor * 1.00
+selected_emission_factor = selected_emission_factor * 1.0
 
 # =====================================================
 
-# APP
+# MAIN APP
 
 # =====================================================
 
-st.title("Urban Carbon Intelligence System - Flowchart Compliant")
+st.title("Urban Carbon Intelligence System")
 
 if st.button("Run Full Model"):
 
@@ -209,7 +187,6 @@ features = [
 
 model, scaler, poly = train_model(df[features], df["pm10"])
 
-# LOOCV
 loo = LeaveOneOut()
 preds = []
 actuals = []
@@ -219,7 +196,6 @@ for train_idx, test_idx in loo.split(df):
     y_tr = df.iloc[train_idx]["pm10"]
     X_te = df.iloc[test_idx][features]
     y_te = df.iloc[test_idx]["pm10"]
-
     m, sc, p = train_model(X_tr, y_tr)
     pred = m.predict(sc.transform(p.transform(X_te)))[0]
     preds.append(pred)
@@ -229,7 +205,6 @@ mae = mean_absolute_error(actuals, preds)
 rmse = np.sqrt(mean_squared_error(actuals, preds))
 r2 = r2_score(actuals, preds)
 
-# ENERGY + CARBON CONVERSION
 energy_proxy = np.mean(df["pm10"]) / 1000.0
 carbon_estimate = energy_proxy * selected_emission_factor
 
@@ -237,23 +212,14 @@ st.metric("MAE", "%.2f" % mae)
 st.metric("RMSE", "%.2f" % rmse)
 st.metric("R2", "%.3f" % r2)
 st.metric("Night Light Proxy", "%.1f" % night_light)
-st.metric("Emission Factor Used (tCO2/MWh)", "%.3f" % selected_emission_factor)
-st.metric("Carbon Estimate (tCO2 proxy)", "%.4f" % carbon_estimate)
+st.metric("Emission Factor Used", "%.3f" % selected_emission_factor)
+st.metric("Carbon Estimate", "%.4f" % carbon_estimate)
 
-# POLICY ENGINE
-if carbon_estimate > 0.08:
-    st.warning("Traffic Control Suggestion: Activate congestion measures")
-    st.warning("Carbon Capture Placement: Target high intensity zones")
-    st.warning("Urban Planning Advisory: Increase green buffers")
-else:
-    st.success("Emissions within moderate range")
-
-# SPATIAL VISUALIZATION
 fig, ax = plt.subplots()
 scatter = ax.scatter(df["lon"], df["lat"], c=df["pm10"])
 plt.colorbar(scatter, ax=ax)
 ax.set_title("PM10 Spatial Distribution")
 st.pyplot(fig)
 
-st.success("Full flowchart model executed successfully.")
+st.success("Model executed successfully.")
 ```
