@@ -50,14 +50,16 @@ def fetch_tomtom_traffic():
     except: return 25
 
 def fetch_waqi_data():
-    """Fetches Air Quality indices for spatial mapping"""
     try:
         url = f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={WAQI_TOKEN}"
         data = requests.get(url, timeout=5).json()
         if data.get("status") == "ok":
-            return pd.DataFrame([{"lat": s["lat"], "lon": s["lon"], "aqi": s["aqi"]} for s in data["data"]])
+            df = pd.DataFrame([{"lat": s["lat"], "lon": s["lon"], "aqi": s["aqi"]} for s in data["data"]])
+            # Ensure AQI is numeric immediately
+            df["aqi"] = pd.to_numeric(df["aqi"], errors='coerce')
+            return df.dropna(subset=["aqi"]) # Optional: remove rows with invalid AQI
     except: pass
-    return pd.DataFrame({"lat": [26.85], "lon": [80.94], "aqi": [150]})
+    return pd.DataFrame({"lat": [26.85], "lon": [80.94], "aqi": [150.0]})
 
 # ================= 🖥️ STREAMLIT UI & LOGIC =================
 
