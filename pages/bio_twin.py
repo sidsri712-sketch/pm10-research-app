@@ -114,25 +114,37 @@ m4.metric("Live AQI", f"{aqi_df['aqi'].mean():.0f}", delta="-15% vs Diesel Basel
 st.divider()
 
 # Phase 2: Spatial & Asset Analysis
+import folium
+from streamlit_folium import st_folium
+
+# --- In Phase 2: Spatial & Asset Analysis ---
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
-    st.subheader("📍 Air Quality Distribution (Lucknow Metro)")
-    fig, ax = plt.subplots(figsize=(10, 4))
-    sc = ax.scatter(aqi_df["lon"], aqi_df["lat"], c=aqi_df["aqi"], s=aqi_df["aqi"]*2, cmap='YlOrRd', alpha=0.7)
-    plt.colorbar(sc, label="AQI (PM10/2.5)")
-    ax.set_title("Urban Pollution Hotspots")
-    st.pyplot(fig)
-
-with col_right:
-    st.subheader("🌳 Carbon Sink Assets")
-    st.write(f"**Miyawaki Forests:** {miyawaki_kits} units")
-    st.progress(min(miyawaki_kits/100, 1.0), text="Green Belt Progress")
+    st.subheader("📍 Interactive Air Quality Basemap")
     
-    st.write("**Traffic Impact on ROI:**")
-    impact = "CRITICAL" if live_traffic_speed < 15 else "LOW"
-    st.warning(f"Congestion Level: {impact} (Speed: {live_traffic_speed}km/h)")
-    st.info("EVs are 40% more cost-effective during Lucknow's current congestion levels.")
+    # Initialize Folium Map centered on Lucknow
+    # Basemap options: "OpenStreetMap", "CartoDB Positron" (clean), "CartoDB Dark_Matter"
+    m = folium.Map(location=[LUCKNOW_LAT, LUCKNOW_LON], zoom_start=12, tiles="CartoDB Positron")
+
+    # Add Circle Markers for each AQI data point
+    for _, row in aqi_df.iterrows():
+        # Determine color based on AQI severity
+        color = "green" if row['aqi'] < 50 else "orange" if row['aqi'] < 100 else "red"
+        
+        folium.CircleMarker(
+            location=[row["lat"], row["lon"]],
+            radius=row["aqi"] / 10,  # Size proportional to pollution
+            color=color,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.6,
+            popup=f"AQI: {row['aqi']:.0f}",
+            tooltip="Click for details"
+        ).add_to(m)
+
+    # Render the map in Streamlit
+    st_folium(m, width=800, height=450)
 
 # Phase 3: Financial Breakdown
 st.subheader("📋 2026 Financial Audit (Lakhs INR)")
