@@ -1,4 +1,5 @@
 # Save this file inside pages/ as: carbon_page.py
+
 # This is a COMPLETE, ready-to-run Streamlit multipage file.
 
 import streamlit as st
@@ -48,8 +49,9 @@ def fetch_traffic():
     try:
         lat, lon = LUCKNOW_CENTER
         url = (
-            f"https://api.tomtom.com/traffic/services/4/flowSegmentData/"
-            f"absolute/10/json?point={lat},{lon}&key={TOMTOM_TOKEN}"
+            "https://api.tomtom.com/traffic/services/4/flowSegmentData/"
+            "absolute/10/json?point="
+            f"{lat},{lon}&key={TOMTOM_TOKEN}"
         )
         r = requests.get(url, timeout=10)
         data = r.json()
@@ -72,7 +74,8 @@ def fetch_nasa():
 def fetch_waqi(weather):
     try:
         url = (
-            f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={WAQI_TOKEN}"
+            "https://api.waqi.info/map/bounds/?latlng="
+            f"{LUCKNOW_BOUNDS}&token={WAQI_TOKEN}"
         )
         r = requests.get(url, timeout=10)
         data = r.json()
@@ -94,7 +97,7 @@ def fetch_waqi(weather):
                 raise ValueError("Insufficient WAQI stations")
             return df
         else:
-            raise ValueError("WAQI API status not ok")
+            raise ValueError("API Error")
     except Exception:
         return pd.DataFrame(
             {
@@ -147,6 +150,10 @@ if st.button("Run Full Model"):
     night_light = fetch_nasa()
     df = fetch_waqi(weather)
 
+    # Convert pm10 to numeric and drop non-numeric/empty rows (the fix for the TypeError)
+    df["pm10"] = pd.to_numeric(df["pm10"], errors='coerce')
+    df = df.dropna(subset=["pm10"])
+
     now = pd.Timestamp.now()
     df["hour"] = now.hour
     df["month"] = now.month
@@ -183,22 +190,17 @@ if st.button("Run Full Model"):
     energy_proxy = np.mean(df["pm10"]) / 1000.0
     carbon_estimate = energy_proxy * selected_factor
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("MAE", f"{mae:.2f}")
-    col2.metric("RMSE", f"{rmse:.2f}")
-    col3.metric("R2", f"{r2:.3f}")
-
-    col4, col5, col6 = st.columns(3)
-    col4.metric("Night Light Proxy", f"{night_light:.1f}")
-    col5.metric("Emission Factor", f"{selected_factor:.3f}")
-    col6.metric("Carbon Estimate", f"{carbon_estimate:.4f}")
+    st.metric("MAE", f"{mae:.2f}")
+    st.metric("RMSE", f"{rmse:.2f}")
+    st.metric("R2", f"{r2:.3f}")
+    st.metric("Night Light Proxy", f"{night_light:.1f}")
+    st.metric("Emission Factor Used", f"{selected_factor:.3f}")
+    st.metric("Carbon Estimate", f"{carbon_estimate:.4f}")
 
     fig, ax = plt.subplots()
-    scatter = ax.scatter(df["lon"], df["lat"], c=df["pm10"], cmap='viridis')
-    plt.colorbar(scatter, ax=ax, label='PM10 Level')
+    scatter = ax.scatter(df["lon"], df["lat"], c=df["pm10"])
+    plt.colorbar(scatter, ax=ax)
     ax.set_title("PM10 Spatial Distribution")
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
     st.pyplot(fig)
 
     st.success("Model executed successfully.")
