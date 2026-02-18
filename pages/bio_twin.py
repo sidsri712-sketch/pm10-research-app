@@ -291,3 +291,63 @@ else:
 
 st.divider()
 st.caption("Synaptic Rig 2026 – Intelligent Urban Carbon Optimization Platform")
+# ================= 📄 GOOGLE SHEETS – SHEET2 PERSISTENT ML STORAGE =================
+
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+
+# 🔐 Update this with your credential JSON filename
+GOOGLE_CREDENTIALS_FILE = "credentials.json"
+
+# 🔗 Update this with your Google Sheet name
+GOOGLE_SHEET_NAME = "SynapticRig_Data"
+
+def connect_google_sheet():
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds = ServiceAccountCredentials.from_json_keyfile_name(
+        GOOGLE_CREDENTIALS_FILE, scope
+    )
+    client = gspread.authorize(creds)
+    sheet = client.open(GOOGLE_SHEET_NAME).worksheet("Sheet2")
+    return sheet
+
+# Load historical data from Sheet2 (only once per session)
+if "sheet_loaded" not in st.session_state:
+    try:
+        sheet = connect_google_sheet()
+        data = sheet.get_all_records()
+
+        for row in data:
+            st.session_state.training_X.append([
+                float(row["ev_count"]),
+                float(row["avg_daily_km"]),
+                float(row["solar_capacity"]),
+                float(row["miyawaki_kits"]),
+                float(row["live_solar"]),
+                float(row["live_speed"])
+            ])
+            st.session_state.training_y.append(float(row["annual_co2_saved"]))
+
+        st.session_state.sheet_loaded = True
+        st.success("Historical ML data loaded from Sheet2")
+
+    except Exception as e:
+        st.warning(f"Sheet2 load skipped: {e}")
+
+# Append current session data to Sheet2
+try:
+    sheet = connect_google_sheet()
+    sheet.append_row([
+        ev_count,
+        avg_daily_km,
+        solar_capacity,
+        miyawaki_kits,
+        live_solar_yield,
+        live_traffic_speed,
+        annual_co2_saved
+    ])
+except Exception as e:
+    st.warning(f"Sheet2 update skipped: {e}")
