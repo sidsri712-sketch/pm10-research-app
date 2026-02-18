@@ -185,3 +185,109 @@ st.metric("Policy Compliance", "Compliant" if policy_compliance else "Non-Compli
 st.divider()
 
 st.success("Analysis complete. This configuration complies with UP State Green Hydrogen & EV Policy 2026.")
+# ================= 📈 USER FRIENDLY ENHANCEMENTS (ADDED ONLY) =================
+
+st.divider()
+st.subheader("📊 Carbon & Revenue Breakdown")
+
+breakdown_df = pd.DataFrame({
+    "Component": [
+        "EV Diesel Replacement",
+        "Solar Grid Offset",
+        "Miyawaki Sequestration"
+    ],
+    "tCO2 Contribution": [
+        (ev_count * avg_daily_km * 365 * EV_DIESEL_EMISSION_FACTOR / 1000),
+        (annual_solar_gen * INDIA_GRID_EF_2026 / 1000),
+        miyawaki_sequestration
+    ]
+})
+
+st.bar_chart(breakdown_df.set_index("Component"))
+
+st.divider()
+st.subheader("💰 Revenue Distribution")
+
+revenue_df = pd.DataFrame({
+    "Source": [
+        "Fuel Savings",
+        "Solar Savings",
+        "Carbon Credit Revenue"
+    ],
+    "Lakhs INR": [
+        annual_fuel_saved_lakhs,
+        annual_solar_savings_lakhs,
+        carbon_revenue_lakhs
+    ]
+})
+
+st.bar_chart(revenue_df.set_index("Source"))
+
+# ================= 📅 5-Year Projection Visualization =================
+
+st.divider()
+st.subheader("📅 5-Year Carbon Projection")
+
+projection_df = pd.DataFrame({
+    "Year": [f"Year {i+1}" for i in range(len(projected_co2))],
+    "Projected tCO2": projected_co2
+})
+
+st.line_chart(projection_df.set_index("Year"))
+
+# ================= 🧠 ML Explainability =================
+
+st.divider()
+st.subheader("🧠 ML Intelligence Insight")
+
+if len(st.session_state.training_X) > 5:
+    feature_names = [
+        "EV Count",
+        "Avg Daily KM",
+        "Solar Capacity",
+        "Miyawaki Kits",
+        "Solar Yield",
+        "Traffic Speed"
+    ]
+
+    importances = st.session_state.ml_model.feature_importances_
+    importance_df = pd.DataFrame({
+        "Feature": feature_names,
+        "Importance": importances
+    }).sort_values("Importance", ascending=False)
+
+    st.bar_chart(importance_df.set_index("Feature"))
+else:
+    st.info("ML feature importance will appear after sufficient historical samples.")
+
+# ================= 📍 Sustainability Health Score =================
+
+st.divider()
+st.subheader("🌱 Sustainability Health Score")
+
+health_score = (
+    min(annual_co2_saved / 1000, 1.0) * 0.4 +
+    min(carbon_revenue_lakhs / 50, 1.0) * 0.3 +
+    max(0, 1 - (aqi_df['aqi'].mean() / 300)) * 0.3
+)
+
+st.progress(min(max(health_score, 0), 1))
+st.write(f"Overall Sustainability Score: {health_score*100:.1f}%")
+
+# ================= 📘 Decision Guidance =================
+
+st.divider()
+st.subheader("📘 Decision Support Guidance")
+
+if optimal_ev > ev_count:
+    st.warning(f"Consider increasing EV fleet to approximately {optimal_ev} trucks to maximize solar-linked carbon gains.")
+else:
+    st.success("Current EV deployment is aligned with renewable capacity.")
+
+if not policy_compliance:
+    st.error("Current configuration does not meet projected policy carbon threshold. Consider scaling solar or EV capacity.")
+else:
+    st.success("Configuration satisfies projected carbon compliance threshold.")
+
+st.divider()
+st.caption("Synaptic Rig 2026 – Intelligent Urban Carbon Optimization Platform")
