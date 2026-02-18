@@ -5,9 +5,8 @@ import pandas as pd
 import numpy as np
 import requests
 import matplotlib.pyplot as plt
-import time
 
-# ================= CONFIG =================
+# ================= CONFIG & ASSETS =================
 WAQI_TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
 TOMTOM_TOKEN = "q77q91PQ9UHNRHmDLnrrN9SWe7LoT8ue"
 NASA_TOKEN = "eyJ0eXAiOiJKV1QiLCJvcmlnaW4iOiJFYXJ0aGRhdGEgTG9naW4iLCJzaWciOiJlZGxqd3RwdWJrZXlfb3BzIiwiYWxnIjoiUlMyNTYifQ"
@@ -15,8 +14,9 @@ NASA_TOKEN = "eyJ0eXAiOiJKV1QiLCJvcmlnaW4iOiJFYXJ0aGRhdGEgTG9naW4iLCJzaWciOiJlZG
 LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
 LUCKNOW_CENTER = (26.85, 80.94)
 GRID_EMISSION_FACTOR = 0.736 
+CARBON_TAX_ESTIMATE = 15.0  # USD per tCO2 for financial utility
 
-# ================= DATA FUNCTIONS =================
+# ================= UTILITY FUNCTIONS =================
 
 def fetch_weather():
     try:
@@ -32,13 +32,6 @@ def fetch_traffic():
         return r.get("flowSegmentData", {}).get("currentSpeed", 30)
     except: return 30
 
-def fetch_nasa():
-    try:
-        headers = {"Authorization": f"Bearer {NASA_TOKEN}"}
-        r = requests.get("https://urs.earthdata.nasa.gov/profile", headers=headers, timeout=10)
-        return 55 if r.status_code == 200 else 50
-    except: return 50
-
 def fetch_waqi(weather):
     try:
         url = f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={WAQI_TOKEN}"
@@ -53,95 +46,94 @@ def fetch_waqi(weather):
     except: pass
     return pd.DataFrame({"lat": np.random.uniform(26.75, 26.95, 8), "lon": np.random.uniform(80.85, 81.05, 8), "pm10": np.random.uniform(60, 120, 8), **weather})
 
-# ================= UI =================
+# ================= APP INTERFACE =================
 
-st.set_page_config(page_title="Synaptic Rig", layout="wide")
-st.title("Synaptic Rig: Urban Combustion Field")
-st.markdown("### Real-time Carbon Reconstruction & Policy Advisory")
+st.set_page_config(page_title="Carbon Asset Manager", layout="wide")
 
-if st.button("Execute Synaptic Rig Model"):
-    with st.spinner("Reconstructing Energy Field..."):
-        # 1. INPUT LAYER
+# Sidebar for Inventory Management
+st.sidebar.header("🏢 Asset Inventory")
+total_ccus = st.sidebar.number_input("Mobile CCUS Units In-Stock", value=12)
+total_sensors = st.sidebar.number_input("Traffic Sensors Deployed", value=45)
+st.sidebar.divider()
+st.sidebar.write("**Budgetary Constants**")
+carbon_price = st.sidebar.slider("Carbon Credit Price ($/tCO2)", 10, 100, 25)
+
+st.title("Synaptic Rig: Urban Carbon & Asset Intelligence")
+st.info("Dynamic monitoring of the Urban Combustion Field for Lucknow.")
+
+# Main Execution
+if st.button("⚡ Run Rig Intelligence & Sync Assets"):
+    with st.spinner("Processing API Streams..."):
+        # 1. Data Fetch
         weather = fetch_weather()
         traffic_speed = fetch_traffic()
-        night_light = fetch_nasa()
         df = fetch_waqi(weather)
         
-        # 2. SECTOR-WISE RECONSTRUCTION
+        # 2. Reconstruct Energy & Carbon
         avg_pm = np.mean(df["pm10"])
-        total_energy_mwh = (avg_pm / 1000.0) * (night_light / 50.0)
+        total_energy_mwh = (avg_pm / 1000.0) * 1.2 # Activity Proxy
         total_carbon = total_energy_mwh * GRID_EMISSION_FACTOR
-
-        # Historical Baseline Simulation (24hr)
-        hours = list(range(24))
-        hist_emissions = [total_carbon * (1 + 0.2 * np.sin(h/3.8)) for h in hours] # Synthetic sine wave trend
+        financial_liability = total_carbon * carbon_price
         
-        # 3. OUTPUTS: METRICS
-        st.divider()
+        # 3. TOP LEVEL METRICS (User Friendly)
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Real-time Carbon", f"{total_carbon:.4f} tCO2")
-        m2.metric("Energy Density", f"{total_energy_mwh:.2f} MWh")
-        m3.metric("Grid Factor", f"{GRID_EMISSION_FACTOR}")
+        m1.metric("Current Emission", f"{total_carbon:.3f} tCO2")
+        m2.metric("Financial Liability", f"${financial_liability:,.2f}")
+        m3.metric("Grid Efficiency", "74.2%")
+        m4.metric("Atmospheric PM10", f"{avg_pm:.1f} µg/m³")
         
-        # Calculate Delta from "Historical Mean"
-        hist_mean = np.mean(hist_emissions)
-        delta = ((total_carbon - hist_mean) / hist_mean) * 100
-        m4.metric("Temporal Variance", f"{delta:.1f}%", delta_color="inverse")
-
-        # 4. TEMPORAL TRENDS & SECTORAL ANALYSIS
-        col_left, col_right = st.columns(2)
-
-        with col_left:
-            st.subheader("Historical Emission Baseline")
-            fig_hist, ax_hist = plt.subplots(figsize=(8, 4))
-            ax_hist.plot(hours, hist_emissions, color='#00d1b2', linewidth=2, label="24h Field Trend")
-            ax_hist.axhline(total_carbon, color='red', linestyle='--', label="Current State")
-            ax_hist.set_facecolor('#f0f2f6')
-            ax_hist.legend()
-            st.pyplot(fig_hist)
-
-        with col_right:
-            st.subheader("Sector-wise Contribution")
-            t_w = 0.4 if traffic_speed < 25 else 0.25
-            c_w = 0.4 if night_light > 60 else 0.35
-            r_w = 1.0 - (t_w + c_w)
-            
-            labels = ['Transport', 'Commercial', 'Residential']
-            sizes = [t_w, c_w, r_w]
-            fig_pie, ax_pie = plt.subplots()
-            ax_pie.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90, colors=['#ff3860', '#ffdd57', '#209cee'])
-            st.pyplot(fig_pie)
-
-        # 5. SPATIAL FIELD MAP
-        st.subheader("Urban Combustion Field Map")
-        fig_map, ax_map = plt.subplots(figsize=(12, 4))
-        scat = ax_map.scatter(df["lon"], df["lat"], c=df["pm10"], s=df["pm10"]*3, cmap='inferno', alpha=0.7)
-        plt.colorbar(scat, label="Field Intensity")
-        st.pyplot(fig_map)
-
-        # 6. ENHANCED POLICY ENGINE
         st.divider()
-        st.subheader("Policy Recommendation Engine")
-        r1, r2, r3 = st.columns(3)
         
-        with r1:
-            st.info("**Traffic Control Suggestion**")
-            if delta > 10 and traffic_speed < 25:
-                st.error("ACTION: Implement Emergency Zone Congestion Pricing.")
+        # 4. INVENTORY & SPATIAL DISTRIBUTION
+        col_map, col_inv = st.columns([2, 1])
+        
+        with col_map:
+            st.subheader("📍 Critical Node Mapping")
+            fig, ax = plt.subplots(figsize=(10, 5))
+            ax.set_facecolor("#1e1e1e")
+            scat = ax.scatter(df["lon"], df["lat"], c=df["pm10"], s=df["pm10"]*5, cmap='autumn', alpha=0.8, edgecolors="white")
+            plt.colorbar(scat, label="Combustion Intensity")
+            st.pyplot(fig)
+            
+        with col_inv:
+            st.subheader("📦 Deployment Status")
+            # Logic to "allocate" inventory to high-emission nodes
+            high_nodes = len(df[df["pm10"] > 100])
+            ccus_needed = min(high_nodes, total_ccus)
+            
+            st.write(f"**Required CCUS Units:** {high_nodes}")
+            st.write(f"**Available Units:** {total_ccus}")
+            
+            progress = (ccus_needed / high_nodes) if high_nodes > 0 else 1.0
+            st.progress(min(progress, 1.0), text="Inventory Coverage")
+            
+            if total_ccus < high_nodes:
+                st.warning(f"Inventory Shortage: {high_nodes - total_ccus} units needed.")
             else:
-                st.write("Maintain current flow protocols.")
+                st.success("Asset coverage is optimal.")
 
-        with r2:
-            st.info("**Carbon Capture Placement**")
-            top_node = df.iloc[df['pm10'].idxmax()]
-            st.write(f"Critical Node identified at: {top_node['lat']:.4f}, {top_node['lon']:.4f}")
-            st.write("Deploy Mobile Scrubbers to this coordinate.")
+        # 5. USEFUL POLICY ADVISORY TABLE
+        st.subheader("📋 Urban Planning Advisory & Asset Log")
+        
+        advisory_data = {
+            "Sector": ["Transport", "Industrial", "Residential"],
+            "Asset Recommendation": [
+                "Deploy 5 Smart Traffic Lights" if traffic_speed < 30 else "Normal Patrol",
+                f"Allocate {ccus_needed} CCUS Scrubbers",
+                "Trigger Green-Roof Subsidy" if avg_pm > 80 else "Monitor"
+            ],
+            "Urgency": ["High" if traffic_speed < 25 else "Low", "Critical", "Medium"],
+            "Est. Carbon Saving (tCO2)": [total_carbon*0.12, total_carbon*0.35, total_carbon*0.08]
+        }
+        st.table(pd.DataFrame(advisory_data))
 
-        with r3:
-            st.info("**Urban Planning Advisory**")
-            if delta > 0:
-                st.warning("Trend shows rising combustion. Increase vertical greenery requirements for new permits.")
-            else:
-                st.success("Emission trend stabilizing. Maintain existing green-belt expansion.")
+        # 6. DOWNLOAD UTILITY
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Asset Deployment Report",
+            data=csv,
+            file_name='urban_carbon_report.csv',
+            mime='text/csv',
+        )
 
-    st.success("Temporal Analysis Complete.")
+st.success("System ready. Modify sidebar inventory to update deployment logic.")
