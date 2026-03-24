@@ -121,6 +121,8 @@ for i in range(len(df)):
             reason = "Battery depleted → biomass triggered"
 
     # ---------- AI ANOMALY DETECTION ----------
+    df["Solar"] = solar_var
+    df["WindGen"] = wind_var
     if df["Cloud"][i] > 80 and df["Solar"][i] < 0.5:
         anomaly = "High cloud → solar collapse"
 
