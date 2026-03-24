@@ -8,7 +8,21 @@ API_KEY = "c86236be4a9f76875aad940c96e5111b"
 CITY = "Lucknow"
 
 st.set_page_config(layout="wide")
-st.title(" SynaptikRig-RF Hybrid Energy BioTwin")
+st.title("⚡ SynaptikRig-RF Hybrid Energy BioTwin")
+
+# ================= ONBOARDING =================
+with st.expander("🧭 First Time Here? Click to Understand"):
+    st.write("""
+This BioTwin simulates a hybrid renewable energy system using AI.
+
+It:
+• Uses weather data to predict solar & wind power  
+• Applies SynaptikRig-RF hybrid intelligence  
+• Balances energy using battery + biomass backup  
+• Shows real-time decisions and system health  
+
+Goal: Maximize renewable usage, minimize backup energy
+""")
 
 # ================= WEATHER =================
 def get_weather():
@@ -17,7 +31,6 @@ def get_weather():
 
 data = get_weather()
 
-# Extract 24h forecast
 times, temp, wind, cloud = [], [], [], []
 
 for i in range(8):
@@ -35,7 +48,7 @@ df = pd.DataFrame({
 })
 
 # ================= USER INPUT =================
-st.sidebar.header(" System Parameters")
+st.sidebar.header("⚙️ System Parameters")
 
 battery_capacity = st.sidebar.slider("Battery Capacity (kWh)", 5, 20, 10)
 battery_level = st.sidebar.slider("Initial Battery (%)", 10, 100, 50)
@@ -43,14 +56,11 @@ load_base = st.sidebar.slider("Base Load (kW)", 0.5, 5.0, 1.5)
 biomass_power = st.sidebar.slider("Biomass Backup (kW)", 0.2, 2.0, 0.8)
 
 # ================= MODELS =================
-
 def solar_model(cloud):
     return max(0, (100 - cloud)/100 * 2.5)
 
 def wind_model(speed):
     return min(1.5, (speed**3)/50)
-
-# ================= SYNAPTIKRIG-RF =================
 
 def synaptic_memory(series, alpha=0.6):
     smoothed = []
@@ -68,7 +78,6 @@ def rf_ok_adjustment(solar, wind):
     return solar * 0.9 + wind * 1.1
 
 # ================= APPLY MODELS =================
-
 solar = [solar_model(c) for c in df["Cloud"]]
 wind_gen = [wind_model(w) for w in df["Wind"]]
 
@@ -81,10 +90,10 @@ wind_var = hole_variogram(wind_smoothed)
 rf_output = [rf_ok_adjustment(s, w) for s, w in zip(solar_var, wind_var)]
 
 # ================= SIMULATION =================
-
 battery = battery_level/100 * battery_capacity
 battery_series = []
 decision_series = []
+reason_series = []
 
 for i in range(len(df)):
     load = load_base + np.random.uniform(-0.3, 0.3)
@@ -93,74 +102,88 @@ for i in range(len(df)):
     if generation >= load:
         battery = min(battery_capacity, battery + (generation - load))
         decision = "Optimized Solar/Wind"
+        reason = "Renewables sufficient → excess stored in battery"
+
     else:
         deficit = load - generation
 
         if battery > deficit:
             battery -= deficit
             decision = "Battery Compensation"
+            reason = "Renewables insufficient → battery used"
+
         else:
             decision = "Biomass Backup"
+            reason = "Renewables + battery insufficient → biomass used"
 
     battery_series.append(battery)
     decision_series.append(decision)
+    reason_series.append(reason)
 
 df["Solar"] = solar_var
 df["WindGen"] = wind_var
 df["RF_Output"] = rf_output
 df["Battery"] = battery_series
 df["Decision"] = decision_series
+df["Reason"] = reason_series
 
-# ================= UI =================
+# ================= REAL-TIME NARRATION =================
+st.subheader("🔍 What the BioTwin is Doing Right Now")
 
+latest = df.iloc[-1]
+
+st.info(f"""
+At {latest['Time']}:
+
+• Solar: {round(latest['Solar'],2)} kW  
+• Wind: {round(latest['WindGen'],2)} kW  
+• AI Output: {round(latest['RF_Output'],2)} kW  
+
+• Decision: **{latest['Decision']}**
+
+The BioTwin analyzed weather → optimized energy → balanced load.
+""")
+
+# ================= METRICS =================
 col1, col2, col3 = st.columns(3)
-col1.metric(" Avg Temp (°C)", round(np.mean(df["Temp"]),2))
-col2.metric(" Avg Wind (m/s)", round(np.mean(df["Wind"]),2))
-col3.metric(" Avg Cloud (%)", round(np.mean(df["Cloud"]),2))
+col1.metric("Avg Temp (°C)", round(np.mean(df["Temp"]),2))
+col2.metric("Avg Wind (m/s)", round(np.mean(df["Wind"]),2))
+col3.metric("Avg Cloud (%)", round(np.mean(df["Cloud"]),2))
 
 st.divider()
 
-# ================= AXIS EXPLANATION =================
+# ================= PIPELINE =================
+st.subheader("⚙️ Live Pipeline Execution")
 
-st.markdown("### 📈 Graph Interpretation Guide")
-st.info("""
-Energy Output Graph:
-- X-axis → Time (3-hour interval forecast)
-- Y-axis → Power Output (kW)
-
-Battery Graph:
-- X-axis → Time
-- Y-axis → Stored Energy (kWh)
-
-Energy Distribution:
-- X-axis → Energy Source
-- Y-axis → Total Contribution (kWh)
+st.write("""
+1. Weather API fetches forecast  
+2. Solar & Wind models estimate generation  
+3. Synaptic Memory smooths fluctuations  
+4. Variogram layer captures temporal patterns  
+5. RF-OK fusion optimizes output  
+6. Decision engine balances load vs supply  
 """)
 
-# ================= ENERGY OUTPUT =================
-
-st.subheader(" SynaptikRig-RF Energy Output")
+# ================= GRAPHS =================
+st.subheader("📈 Energy Output")
 st.line_chart(df.set_index("Time")[["Solar", "WindGen", "RF_Output"]])
-st.caption("X-axis: Time | Y-axis: Power Output (kW)")
 
-# ================= BATTERY =================
-
-st.subheader(" Battery Dynamics")
+st.subheader("🔋 Battery Dynamics")
 st.line_chart(df.set_index("Time")["Battery"])
-st.caption("X-axis: Time | Y-axis: Battery Energy (kWh)")
 
-st.markdown("### 🔋 Battery Metrics")
-st.write(f"Max Battery: {round(max(df['Battery']),2)} kWh")
-st.write(f"Min Battery: {round(min(df['Battery']),2)} kWh")
-st.write(f"Final Battery: {round(df['Battery'].iloc[-1],2)} kWh")
+# ================= INTERPRETATION =================
+st.subheader("📊 System Interpretation")
 
-# ================= DECISIONS =================
+if np.mean(df["Battery"]) > battery_capacity * 0.4:
+    st.success("System Stable: Renewable generation is meeting demand efficiently.")
+else:
+    st.warning("System Under Stress: Backup sources are frequently required.")
 
-st.subheader(" Decision Timeline")
-st.dataframe(df[["Time", "Decision"]])
+# ================= DECISION TABLE =================
+st.subheader("🧠 Decision Explainability")
+st.dataframe(df[["Time", "Decision", "Reason"]])
 
 # ================= ENERGY MIX =================
-
 energy_mix = pd.DataFrame({
     "Source": ["Solar", "Wind", "Biomass"],
     "Contribution": [
@@ -170,20 +193,10 @@ energy_mix = pd.DataFrame({
     ]
 })
 
-st.subheader(" Energy Distribution")
+st.subheader("⚡ Energy Distribution")
 st.bar_chart(energy_mix.set_index("Source"))
 
-# ================= SYSTEM STATUS =================
-
-st.subheader(" System Status")
-
-if np.mean(df["Battery"]) > battery_capacity * 0.4:
-    st.success("System Stable ")
-else:
-    st.warning("System Under Stress ")
-
 # ================= DIAGNOSTICS =================
-
 st.subheader("⚙️ System Diagnostics")
 
 total_gen = sum(df["RF_Output"])
@@ -194,19 +207,3 @@ st.write(f"Total Generation: {round(total_gen,2)} kWh")
 st.write(f"Total Load: {round(total_load,2)} kWh")
 st.write(f"Biomass Events: {deficit_events}")
 st.write(f"Efficiency: {round((total_gen/total_load)*100,2)} %")
-
-# ================= EXPLAINABILITY =================
-
-st.subheader("🧠 Model Explainability")
-
-st.write("""
-SynaptikRig-RF Architecture:
-
-• Solar Model → Cloud-based irradiance estimation  
-• Wind Model → Cubic power scaling  
-• Synaptic Memory → Temporal smoothing  
-• Hole Variogram → Pattern modulation  
-• RF-OK → Hybrid fusion model  
-""")
-
-
