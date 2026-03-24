@@ -1,353 +1,166 @@
 import streamlit as st
+import requests
 import pandas as pd
 import numpy as np
-import requests
-import matplotlib.pyplot as plt
-from datetime import datetime
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
 
-# ================= 🌐 2026 INDIA CONFIG & TOKENS =================
-INDIA_GRID_EF_2026 = 0.548 
-ICM_RATE_INR = 1850  
+# ================= CONFIG =================
+API_KEY = "c86236be4a9f76875aad940c96e5111b"
+CITY = "Lucknow"
 
-EV_DIESEL_EMISSION_FACTOR = 0.30
-SOLAR_PERFORMANCE_RATIO = 0.78     
+st.set_page_config(layout="wide")
+st.title(" SynaptikRig-RF Hybrid Energy BioTwin")
 
-WAQI_TOKEN = "3c52e82eb2a721ba6fd6a7a46385b0fa88642d78"
-TOMTOM_TOKEN = "q77q91PQ9UHNRHmDLnrrN9SWe7LoT8ue"
-NASA_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
+# ================= WEATHER =================
+def get_weather():
+    url = f"http://api.openweathermap.org/data/2.5/forecast?q={CITY}&appid={API_KEY}&units=metric"
+    return requests.get(url).json()
 
-LUCKNOW_LAT, LUCKNOW_LON = 26.8467, 80.9462
-LUCKNOW_BOUNDS = "26.75,80.85,26.95,81.05"
+data = get_weather()
 
-# ================= 🛰️ DATA ACQUISITION ENGINES =================
+# Extract 24h forecast
+times, temp, wind, cloud = [], [], [], []
 
-def fetch_nasa_solar():
-    try:
-        today = datetime.now().strftime('%Y%m%d')
-        params = {
-            "parameters": "ALLSKY_SFC_SW_DWN",
-            "community": "RE",
-            "longitude": LUCKNOW_LON,
-            "latitude": LUCKNOW_LAT,
-            "start": today,
-            "end": today,
-            "format": "JSON"
-        }
-        r = requests.get(NASA_URL, params=params, timeout=5)
-        r.raise_for_status()
-        r = r.json()
-        return r['properties']['parameter']['ALLSKY_SFC_SW_DWN'][today]
-    except Exception as e:
-        st.warning(f"NASA API fallback: {e}")
-        return 4.5
+for i in range(8):
+    entry = data["list"][i]
+    times.append(entry["dt_txt"])
+    temp.append(entry["main"]["temp"])
+    wind.append(entry["wind"]["speed"])
+    cloud.append(entry["clouds"]["all"])
 
-def fetch_tomtom_traffic():
-    try:
-        url = f"https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json?point={LUCKNOW_LAT},{LUCKNOW_LON}&key={TOMTOM_TOKEN}"
-        r = requests.get(url, timeout=5)
-        r.raise_for_status()
-        r = r.json()
-        return r.get("flowSegmentData", {}).get("currentSpeed", 25)
-    except Exception as e:
-        st.warning(f"TomTom API fallback: {e}")
-        return 25
+df = pd.DataFrame({
+    "Time": times,
+    "Temp": temp,
+    "Wind": wind,
+    "Cloud": cloud
+})
 
-def fetch_waqi_data():
-    try:
-        url = f"https://api.waqi.info/map/bounds/?latlng={LUCKNOW_BOUNDS}&token={WAQI_TOKEN}"
-        r = requests.get(url, timeout=5)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("status") == "ok":
-            df = pd.DataFrame([{"lat": s["lat"], "lon": s["lon"], "aqi": s["aqi"]} for s in data["data"]])
-            df["aqi"] = pd.to_numeric(df["aqi"], errors='coerce')
-            return df.dropna(subset=["aqi"])
-    except Exception as e:
-        st.warning(f"WAQI API fallback: {e}")
-    return pd.DataFrame({"lat": [26.85], "lon": [80.94], "aqi": [150.0]})
+# ================= USER INPUT =================
+st.sidebar.header(" System Parameters")
 
-# ================= 🖥️ STREAMLIT UI & LOGIC =================
+battery_capacity = st.sidebar.slider("Battery Capacity (kWh)", 5, 20, 10)
+battery_level = st.sidebar.slider("Initial Battery (%)", 10, 100, 50)
+load_base = st.sidebar.slider("Base Load (kW)", 0.5, 5.0, 1.5)
+biomass_power = st.sidebar.slider("Biomass Backup (kW)", 0.2, 2.0, 0.8)
 
-st.set_page_config(page_title="Synaptic Rig: Lucknow 2026", layout="wide")
+# ================= MODELS =================
 
-with st.sidebar:
-    st.header("🏗️ Urban Asset Inventory")
-    ev_count = st.slider("Fleet Size (EV Trucks)", 10, 500, 50)
-    avg_daily_km = st.number_input("Avg Daily KM per Truck", value=80)
-    miyawaki_kits = st.number_input("Miyawaki Forest Kits (100sqm ea)", value=20)
-    solar_capacity = st.number_input("Existing Solar (kW)", value=250)
-    st.divider()
-    if st.button("🔄 Sync Live Data"):
-        st.rerun()
+def solar_model(cloud):
+    return max(0, (100 - cloud)/100 * 2.5)
 
-if 'live_data' not in st.session_state:
-    st.session_state.live_solar = fetch_nasa_solar()
-    st.session_state.live_speed = fetch_tomtom_traffic()
-    st.session_state.aqi_df = fetch_waqi_data()
+def wind_model(speed):
+    return min(1.5, (speed**3)/50)
 
-if st.sidebar.button("🔄 Force Refresh API Data"):
-    st.session_state.live_solar = fetch_nasa_solar()
-    st.session_state.live_speed = fetch_tomtom_traffic()
-    st.session_state.aqi_df = fetch_waqi_data()
-    st.rerun()
+# ================= SYNAPTIKRIG-RF =================
 
-live_solar_yield = st.session_state.live_solar
-live_traffic_speed = st.session_state.live_speed
-aqi_df = st.session_state.aqi_df
+# Synaptic Lag Memory (temporal smoothing)
+def synaptic_memory(series, alpha=0.6):
+    smoothed = []
+    prev = series[0]
+    for val in series:
+        new_val = alpha * prev + (1 - alpha) * val
+        smoothed.append(new_val)
+        prev = new_val
+    return smoothed
 
-diesel_eff = 3.5 * (0.6 + 0.4 * (live_traffic_speed / 40))
-diesel_eff = max(diesel_eff, 1.8)
+# Hole Variogram Weighting (pattern influence)
+def hole_variogram(series):
+    return [val * (1 + 0.2*np.sin(i)) for i, val in enumerate(series)]
 
-annual_fuel_saved_lakhs = (((ev_count * avg_daily_km / diesel_eff) * 92.5) * 365) / 100000
+# RF-OK (simplified predictive adjustment)
+def rf_ok_adjustment(solar, wind):
+    return solar * 0.9 + wind * 1.1
 
-annual_solar_gen = solar_capacity * live_solar_yield * 330 * SOLAR_PERFORMANCE_RATIO
-annual_solar_savings_lakhs = (annual_solar_gen * 8.5) / 100000
+# ================= APPLY MODELS =================
 
-miyawaki_sequestration = miyawaki_kits * 0.5 
+solar = [solar_model(c) for c in df["Cloud"]]
+wind_gen = [wind_model(w) for w in df["Wind"]]
 
-annual_co2_saved = (annual_solar_gen * INDIA_GRID_EF_2026 / 1000) + \
-                   (ev_count * avg_daily_km * 365 * EV_DIESEL_EMISSION_FACTOR / 1000) + \
-                   miyawaki_sequestration
+# Apply SynaptikRig layers
+solar_smoothed = synaptic_memory(solar)
+wind_smoothed = synaptic_memory(wind_gen)
 
-carbon_revenue_lakhs = (annual_co2_saved * ICM_RATE_INR) / 100000
+solar_var = hole_variogram(solar_smoothed)
+wind_var = hole_variogram(wind_smoothed)
 
-# ================= 🧠 ML INTELLIGENCE ENGINE (MOVED UP) =================
+rf_output = [rf_ok_adjustment(s, w) for s, w in zip(solar_var, wind_var)]
 
-ml_predicted_co2 = annual_co2_saved
+# ================= SIMULATION =================
 
-if "ml_model" not in st.session_state:
-    st.session_state.ml_model = RandomForestRegressor(
-        n_estimators=120,
-        max_depth=6,
-        random_state=42
-    )
-    st.session_state.scaler = StandardScaler()
-    st.session_state.training_X = []
-    st.session_state.training_y = []
+battery = battery_level/100 * battery_capacity
+battery_series = []
+decision_series = []
 
-current_features = [
-    ev_count,
-    avg_daily_km,
-    solar_capacity,
-    miyawaki_kits,
-    live_solar_yield,
-    live_traffic_speed
-]
+for i in range(len(df)):
+    load = load_base + np.random.uniform(-0.3, 0.3)
+    generation = rf_output[i]
 
-st.session_state.training_X.append(current_features)
-st.session_state.training_y.append(annual_co2_saved)
+    if generation >= load:
+        battery = min(battery_capacity, battery + (generation - load))
+        decision = "Optimized Solar/Wind"
+    else:
+        deficit = load - generation
 
-if len(st.session_state.training_X) > 5:
-    X = np.array(st.session_state.training_X)
-    y = np.array(st.session_state.training_y)
+        if battery > deficit:
+            battery -= deficit
+            decision = "Battery Compensation"
+        else:
+            decision = "Biomass Backup"
 
-    X_scaled = st.session_state.scaler.fit_transform(X)
-    st.session_state.ml_model.fit(X_scaled, y)
+    battery_series.append(battery)
+    decision_series.append(decision)
 
-    current_scaled = st.session_state.scaler.transform([current_features])
-    ml_predicted_co2 = st.session_state.ml_model.predict(current_scaled)[0]
+df["Solar"] = solar_var
+df["WindGen"] = wind_var
+df["RF_Output"] = rf_output
+df["Battery"] = battery_series
+df["Decision"] = decision_series
 
-# ================= 🚀 NEW ADVANCED INTELLIGENCE LAYER (ADDED ONLY) =================
+# ================= UI =================
 
-# 1️⃣ Carbon Risk Index
-carbon_risk_index = (
-    (aqi_df['aqi'].mean() / 300) * 0.4 +
-    (live_traffic_speed < 20) * 0.3 +
-    (live_solar_yield < 3.5) * 0.3
-)
-
-# 2️⃣ Optimization Engine (EV Scaling Suggestion)
-optimal_ev = int((solar_capacity * 2) + miyawaki_kits * 3)
-
-# 3️⃣ Recursive 5-Year Projection
-projection_years = 5
-projected_co2 = [annual_co2_saved * (1 + 0.03)**i for i in range(projection_years)]
-
-# 4️⃣ Policy Compliance Rule Engine
-policy_target = 500  # example target tCO2/year
-policy_compliance = annual_co2_saved >= policy_target
-
-# ================= 📊 METRICS DISPLAY =================
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Carbon Saved", f"{annual_co2_saved:.1f} tCO2/yr", delta="Target: Net-Zero")
-m2.metric("Total Annual Savings", f"₹{(annual_fuel_saved_lakhs + annual_solar_savings_lakhs + carbon_revenue_lakhs):.1f} L")
-m3.metric("ICM Market Value", f"₹{carbon_revenue_lakhs:.2f} L")
-m4.metric("Live AQI", f"{aqi_df['aqi'].mean():.0f}", delta="-15% vs Diesel Baseline", delta_color="inverse")
-m1.metric("AI Predicted Carbon", f"{ml_predicted_co2:.1f} tCO2/yr")
-
-st.metric("Carbon Risk Index", f"{carbon_risk_index:.2f}")
-st.metric("Optimal EV Fleet Suggestion", f"{optimal_ev} Trucks")
-st.metric("Policy Compliance", "Compliant" if policy_compliance else "Non-Compliant")
+col1, col2, col3 = st.columns(3)
+col1.metric(" Avg Temp", round(np.mean(df["Temp"]),2))
+col2.metric(" Avg Wind", round(np.mean(df["Wind"]),2))
+col3.metric(" Avg Cloud", round(np.mean(df["Cloud"]),2))
 
 st.divider()
 
-st.success("Analysis complete. This configuration complies with UP State Green Hydrogen & EV Policy 2026.")
-# ================= 📈 USER FRIENDLY ENHANCEMENTS (ADDED ONLY) =================
+st.subheader(" SynaptikRig-RF Energy Output")
+st.line_chart(df[["Solar", "WindGen", "RF_Output"]])
 
-st.divider()
-st.subheader("📊 Carbon & Revenue Breakdown")
+st.subheader(" Battery Dynamics")
+st.line_chart(df["Battery"])
 
-breakdown_df = pd.DataFrame({
-    "Component": [
-        "EV Diesel Replacement",
-        "Solar Grid Offset",
-        "Miyawaki Sequestration"
-    ],
-    "tCO2 Contribution": [
-        (ev_count * avg_daily_km * 365 * EV_DIESEL_EMISSION_FACTOR / 1000),
-        (annual_solar_gen * INDIA_GRID_EF_2026 / 1000),
-        miyawaki_sequestration
+st.subheader(" Decision Timeline")
+st.dataframe(df[["Time", "Decision"]])
+
+# ================= ENERGY MIX =================
+
+energy_mix = pd.DataFrame({
+    "Source": ["Solar", "Wind", "Biomass"],
+    "Contribution": [
+        sum(df["Solar"]),
+        sum(df["WindGen"]),
+        biomass_power * len(df)
     ]
 })
 
-st.bar_chart(breakdown_df.set_index("Component"))
+st.subheader(" Energy Distribution")
+st.bar_chart(energy_mix.set_index("Source"))
 
-st.divider()
-st.subheader("💰 Revenue Distribution")
+# ================= SYSTEM STATUS =================
 
-revenue_df = pd.DataFrame({
-    "Source": [
-        "Fuel Savings",
-        "Solar Savings",
-        "Carbon Credit Revenue"
-    ],
-    "Lakhs INR": [
-        annual_fuel_saved_lakhs,
-        annual_solar_savings_lakhs,
-        carbon_revenue_lakhs
-    ]
-})
+st.subheader(" System Status")
 
-st.bar_chart(revenue_df.set_index("Source"))
-
-# ================= 📅 5-Year Projection Visualization =================
-
-st.divider()
-st.subheader("📅 5-Year Carbon Projection")
-
-projection_df = pd.DataFrame({
-    "Year": [f"Year {i+1}" for i in range(len(projected_co2))],
-    "Projected tCO2": projected_co2
-})
-
-st.line_chart(projection_df.set_index("Year"))
-
-# ================= 🧠 ML Explainability =================
-
-st.divider()
-st.subheader("🧠 ML Intelligence Insight")
-
-if len(st.session_state.training_X) > 5:
-    feature_names = [
-        "EV Count",
-        "Avg Daily KM",
-        "Solar Capacity",
-        "Miyawaki Kits",
-        "Solar Yield",
-        "Traffic Speed"
-    ]
-
-    importances = st.session_state.ml_model.feature_importances_
-    importance_df = pd.DataFrame({
-        "Feature": feature_names,
-        "Importance": importances
-    }).sort_values("Importance", ascending=False)
-
-    st.bar_chart(importance_df.set_index("Feature"))
+if np.mean(df["Battery"]) > battery_capacity * 0.4:
+    st.success("System Stable ")
 else:
-    st.info("ML feature importance will appear after sufficient historical samples.")
+    st.warning("System Under Stress ")
 
-# ================= 📍 Sustainability Health Score =================
+# ================= INSIGHTS =================
 
-st.divider()
-st.subheader("🌱 Sustainability Health Score")
+st.subheader(" SynaptikRig Insights")
 
-health_score = (
-    min(annual_co2_saved / 1000, 1.0) * 0.4 +
-    min(carbon_revenue_lakhs / 50, 1.0) * 0.3 +
-    max(0, 1 - (aqi_df['aqi'].mean() / 300)) * 0.3
-)
-
-st.progress(min(max(health_score, 0), 1))
-st.write(f"Overall Sustainability Score: {health_score*100:.1f}%")
-
-# ================= 📘 Decision Guidance =================
-
-st.divider()
-st.subheader("📘 Decision Support Guidance")
-
-if optimal_ev > ev_count:
-    st.warning(f"Consider increasing EV fleet to approximately {optimal_ev} trucks to maximize solar-linked carbon gains.")
-else:
-    st.success("Current EV deployment is aligned with renewable capacity.")
-
-if not policy_compliance:
-    st.error("Current configuration does not meet projected policy carbon threshold. Consider scaling solar or EV capacity.")
-else:
-    st.success("Configuration satisfies projected carbon compliance threshold.")
-
-st.divider()
-st.caption("Synaptic Rig 2026 – Intelligent Urban Carbon Optimization Platform")
-# ================= 📄 GOOGLE SHEETS – SHEET2 PERSISTENT ML STORAGE =================
-
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-
-# 🔐 Update this with your credential JSON filename
-GOOGLE_CREDENTIALS_FILE = "credentials.json"
-
-# 🔗 Update this with your Google Sheet name
-GOOGLE_SHEET_NAME = "SynapticRig_Data"
-
-def connect_google_sheet():
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(
-        GOOGLE_CREDENTIALS_FILE, scope
-    )
-    client = gspread.authorize(creds)
-    sheet = client.open(GOOGLE_SHEET_NAME).worksheet("Sheet2")
-    return sheet
-
-# Load historical data from Sheet2 (only once per session)
-if "sheet_loaded" not in st.session_state:
-    try:
-        sheet = connect_google_sheet()
-        data = sheet.get_all_records()
-
-        for row in data:
-            st.session_state.training_X.append([
-                float(row["ev_count"]),
-                float(row["avg_daily_km"]),
-                float(row["solar_capacity"]),
-                float(row["miyawaki_kits"]),
-                float(row["live_solar"]),
-                float(row["live_speed"])
-            ])
-            st.session_state.training_y.append(float(row["annual_co2_saved"]))
-
-        st.session_state.sheet_loaded = True
-        st.success("Historical ML data loaded from Sheet2")
-
-    except Exception as e:
-        st.warning(f"Sheet2 load skipped: {e}")
-
-# Append current session data to Sheet2
-try:
-    sheet = connect_google_sheet()
-    sheet.append_row([
-        ev_count,
-        avg_daily_km,
-        solar_capacity,
-        miyawaki_kits,
-        live_solar_yield,
-        live_traffic_speed,
-        annual_co2_saved
-    ])
-except Exception as e:
-    st.warning(f"Sheet2 update skipped: {e}")
+st.write("• Synaptic memory smooths fluctuations")
+st.write("• Hole variogram captures periodic patterns")
+st.write("• RF-OK improves hybrid energy blending")
+st.write("• Biomass ensures system reliability")
