@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 
 # ================= CONFIG =================
-API_KEY = "YOUR_API_KEY"
+API_KEY = "c86236be4a9f76875aad940c96e5111b"
 CITY = "Lucknow"
 
 st.set_page_config(layout="wide")
