@@ -12,16 +12,103 @@ st.set_page_config(layout="wide")
 st.title("⚡ SynaptikRig-RF Hybrid Energy BioTwin")
 
 # ================= ONBOARDING =================
-with st.expander("🧭 First Time Here? Click to Understand"):
+with st.expander(" First Time Here? Click to Understand"):
     st.write("""
-This BioTwin simulates a hybrid renewable energy system using AI.
+###  What This System Does
+This BioTwin simulates a real hybrid renewable energy system.
 
-• Weather → Solar/Wind prediction  
-• SynaptikRig-RF → hybrid intelligence  
-• Battery + Biomass → balancing  
-• Real-time decisions + diagnostics  
+It combines:
+Solar energy 
+Wind energy 
+Biomass backup 
+Battery storage 
+Intelligent decision system 
 
-Goal: maximize renewable usage, minimize backup
+Goal: maximize renewable energy usage and minimize biomass backup.
+
+---
+
+###  System Logic
+Solar + Wind generate power
+Battery stores excess energy
+If generation < demand → battery used
+If battery low → biomass backup activated
+
+---
+
+###  Graph 1: Energy Output
+X-axis → Time (3-hour intervals from weather forecast)
+Y-axis → Power (kW)
+
+Lines:
+Solar → affected by cloud cover
+Wind → depends on wind speed
+AI Output → optimized hybrid energy (SynaptikRig-RF)
+
+ Interpretation:
+Higher AI output = better energy optimization
+
+---
+
+###  Graph 2: Battery Dynamics
+X-axis → Time
+Y-axis → Stored energy (kWh)
+
+ Interpretation:
+Increasing → charging (excess renewable energy)
+Decreasing → supplying load
+Very low → risk of system failure
+
+---
+
+###  Graph 3: Energy Distribution
+Shows contribution of:
+  Solar, Wind, Biomass
+
+ Interpretation:
+More solar/wind = sustainable system
+More biomass = system under stress
+
+---
+
+###  Decision System
+System automatically selects:
+
+“Optimized Solar/Wind” → renewables sufficient
+“Battery Compensation” → battery used
+“Biomass Backup” → last resort
+
+---
+
+###  Anomaly Detection
+System identifies real-world issues:
+
+High cloud → solar drop
+Low wind → weak generation
+Low battery → critical condition
+Biomass triggered → system stress
+
+---
+
+###  System Diagnostics
+Total Generation vs Load
+Biomass usage frequency
+Overall efficiency (%)
+
+ Higher efficiency = better system design  
+
+---
+
+###  SynaptikRig-RF Role
+Smooths fluctuations (Synaptic Memory)
+Captures patterns (Variogram)
+Improves hybrid energy blending
+
+---
+
+###  Final Goal
+A stable, efficient, and scalable hybrid energy system  
+for real-world deployment in rural areas.
 """)
 
 # ================= WEATHER =================
