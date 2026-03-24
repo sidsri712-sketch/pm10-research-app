@@ -209,24 +209,4 @@ SynaptikRig-RF Architecture:
 • RF-OK → Hybrid fusion model  
 """)
 
-# ================= WORKING DIAGRAM =================
 
-st.subheader("🔁 Working Model Diagram")
-
-diagram = """
-flowchart TD
-A[Weather API] --> B[Solar Model]
-A --> C[Wind Model]
-B --> D[Synaptic Memory]
-C --> D
-D --> E[Variogram Layer]
-E --> F[RF-OK Fusion]
-F --> G[Energy Output]
-G --> H{Load Balance}
-H -->|Excess| I[Battery Charge]
-H -->|Deficit| J{Battery?}
-J -->|Yes| K[Discharge]
-J -->|No| L[Biomass]
-"""
-
-st.code(diagram, language="mermaid")
