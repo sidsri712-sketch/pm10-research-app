@@ -213,8 +213,7 @@ SynaptikRig-RF Architecture:
 
 st.subheader("🔁 Working Model Diagram")
 
-st.markdown("""
-```mermaid
+diagram = """
 flowchart TD
 A[Weather API] --> B[Solar Model]
 A --> C[Wind Model]
@@ -228,3 +227,6 @@ H -->|Excess| I[Battery Charge]
 H -->|Deficit| J{Battery?}
 J -->|Yes| K[Discharge]
 J -->|No| L[Biomass]
+"""
+
+st.code(diagram, language="mermaid")
