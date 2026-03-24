@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import numpy as np
+import time
 
 # ================= CONFIG =================
 API_KEY = "c86236be4a9f76875aad940c96e5111b"
@@ -15,13 +16,12 @@ with st.expander("🧭 First Time Here? Click to Understand"):
     st.write("""
 This BioTwin simulates a hybrid renewable energy system using AI.
 
-It:
-• Uses weather data to predict solar & wind power  
-• Applies SynaptikRig-RF hybrid intelligence  
-• Balances energy using battery + biomass backup  
-• Shows real-time decisions and system health  
+• Weather → Solar/Wind prediction  
+• SynaptikRig-RF → hybrid intelligence  
+• Battery + Biomass → balancing  
+• Real-time decisions + diagnostics  
 
-Goal: Maximize renewable usage, minimize backup energy
+Goal: maximize renewable usage, minimize backup
 """)
 
 # ================= WEATHER =================
@@ -94,15 +94,19 @@ battery = battery_level/100 * battery_capacity
 battery_series = []
 decision_series = []
 reason_series = []
+anomaly_series = []
 
 for i in range(len(df)):
     load = load_base + np.random.uniform(-0.3, 0.3)
     generation = rf_output[i]
 
+    anomaly = "Normal"
+
+    # ---------- DECISION LOGIC ----------
     if generation >= load:
         battery = min(battery_capacity, battery + (generation - load))
         decision = "Optimized Solar/Wind"
-        reason = "Renewables sufficient → excess stored in battery"
+        reason = "Renewables sufficient → excess stored"
 
     else:
         deficit = load - generation
@@ -110,39 +114,70 @@ for i in range(len(df)):
         if battery > deficit:
             battery -= deficit
             decision = "Battery Compensation"
-            reason = "Renewables insufficient → battery used"
+            reason = "Battery used to meet deficit"
 
         else:
             decision = "Biomass Backup"
-            reason = "Renewables + battery insufficient → biomass used"
+            reason = "Battery depleted → biomass triggered"
+
+    # ---------- AI ANOMALY DETECTION ----------
+    if df["Cloud"][i] > 80 and df["Solar"][i] < 0.5:
+        anomaly = "High cloud → solar collapse"
+
+    elif df["Wind"][i] < 1:
+        anomaly = "Low wind → weak generation"
+
+    elif battery < battery_capacity * 0.2:
+        anomaly = "Critical battery level"
+
+    elif decision == "Biomass Backup":
+        anomaly = "System failure: renewables + battery insufficient"
 
     battery_series.append(battery)
     decision_series.append(decision)
     reason_series.append(reason)
+    anomaly_series.append(anomaly)
 
+# ================= DATAFRAME =================
 df["Solar"] = solar_var
 df["WindGen"] = wind_var
 df["RF_Output"] = rf_output
 df["Battery"] = battery_series
 df["Decision"] = decision_series
 df["Reason"] = reason_series
+df["Anomaly"] = anomaly_series
 
-# ================= REAL-TIME NARRATION =================
-st.subheader("🔍 What the BioTwin is Doing Right Now")
+# ================= LIVE ENERGY FLOW =================
+st.subheader("🎥 Live Energy Flow (BioTwin)")
 
-latest = df.iloc[-1]
+flow_placeholder = st.empty()
 
-st.info(f"""
-At {latest['Time']}:
+speed = st.slider("Animation Speed", 0.1, 1.5, 0.6)
 
-• Solar: {round(latest['Solar'],2)} kW  
-• Wind: {round(latest['WindGen'],2)} kW  
-• AI Output: {round(latest['RF_Output'],2)} kW  
+for i in range(len(df)):
+    with flow_placeholder.container():
 
-• Decision: **{latest['Decision']}**
+        st.markdown(f"### ⏱ Time: {df['Time'][i]}")
 
-The BioTwin analyzed weather → optimized energy → balanced load.
-""")
+        col1, col2, col3, col4, col5 = st.columns(5)
+
+        col1.metric("☁️ Cloud %", round(df["Cloud"][i],2))
+        col2.metric("☀️ Solar", round(df["Solar"][i],2))
+        col3.metric("🌬 Wind", round(df["WindGen"][i],2))
+        col4.metric("🧠 AI Output", round(df["RF_Output"][i],2))
+        col5.metric("🔋 Battery", round(df["Battery"][i],2))
+
+        st.progress(min(df["RF_Output"][i] / (load_base + 0.1), 1.0))
+
+        # 🚨 anomaly highlight
+        if df["Anomaly"][i] != "Normal":
+            st.error(f"🚨 Anomaly: {df['Anomaly'][i]}")
+        else:
+            st.success("System Normal")
+
+        st.caption(f"Decision: {df['Decision'][i]}")
+
+    time.sleep(speed)
 
 # ================= METRICS =================
 col1, col2, col3 = st.columns(3)
@@ -152,16 +187,20 @@ col3.metric("Avg Cloud (%)", round(np.mean(df["Cloud"]),2))
 
 st.divider()
 
-# ================= PIPELINE =================
-st.subheader("⚙️ Live Pipeline Execution")
+# ================= AXIS EXPLANATION =================
+st.markdown("### 📈 Graph Interpretation Guide")
+st.info("""
+Energy Output Graph:
+- X-axis → Time (3-hour interval forecast)
+- Y-axis → Power Output (kW)
 
-st.write("""
-1. Weather API fetches forecast  
-2. Solar & Wind models estimate generation  
-3. Synaptic Memory smooths fluctuations  
-4. Variogram layer captures temporal patterns  
-5. RF-OK fusion optimizes output  
-6. Decision engine balances load vs supply  
+Battery Graph:
+- X-axis → Time
+- Y-axis → Stored Energy (kWh)
+
+Energy Distribution:
+- X-axis → Energy Source
+- Y-axis → Total Contribution (kWh)
 """)
 
 # ================= GRAPHS =================
@@ -171,17 +210,9 @@ st.line_chart(df.set_index("Time")[["Solar", "WindGen", "RF_Output"]])
 st.subheader("🔋 Battery Dynamics")
 st.line_chart(df.set_index("Time")["Battery"])
 
-# ================= INTERPRETATION =================
-st.subheader("📊 System Interpretation")
-
-if np.mean(df["Battery"]) > battery_capacity * 0.4:
-    st.success("System Stable: Renewable generation is meeting demand efficiently.")
-else:
-    st.warning("System Under Stress: Backup sources are frequently required.")
-
-# ================= DECISION TABLE =================
+# ================= DECISION =================
 st.subheader("🧠 Decision Explainability")
-st.dataframe(df[["Time", "Decision", "Reason"]])
+st.dataframe(df[["Time", "Decision", "Reason", "Anomaly"]])
 
 # ================= ENERGY MIX =================
 energy_mix = pd.DataFrame({
@@ -195,6 +226,14 @@ energy_mix = pd.DataFrame({
 
 st.subheader("⚡ Energy Distribution")
 st.bar_chart(energy_mix.set_index("Source"))
+
+# ================= SYSTEM STATUS =================
+st.subheader("📊 System Interpretation")
+
+if np.mean(df["Battery"]) > battery_capacity * 0.4:
+    st.success("System Stable: Renewables meeting demand")
+else:
+    st.warning("System Under Stress: Backup frequently used")
 
 # ================= DIAGNOSTICS =================
 st.subheader("⚙️ System Diagnostics")
