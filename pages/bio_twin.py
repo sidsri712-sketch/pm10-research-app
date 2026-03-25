@@ -5,22 +5,22 @@ import numpy as np
 import time
 
 # ================= CONFIG =================
-API_KEY = ""c86236be4a9f76875aad940c96e5111b"
+API_KEY = "c86236be4a9f76875aad940c96e5111b"
 CITY = "Lucknow"
 
 st.set_page_config(layout="wide")
-st.title("⚡ Hybrid Renewable Energy BioTwin (SynaptikRig-RF)")
+st.title("Hybrid Renewable Energy BioTwin (SynaptikRig-RF)")
 
 # ================= ONBOARDING =================
-with st.expander("📘 Understand This App (Simple Explanation)"):
+with st.expander("Understand This App"):
     st.markdown("""
-### 🌍 Hybrid Energy System
+Hybrid Energy System:
 Solar + Wind + Battery + Biomass + Grid
 
-X-axis → Time  
-Y-axis → Power (kW) / Energy (kWh)
+X-axis = Time  
+Y-axis = Power (kW) or Energy (kWh)
 
-Goal → Maximize renewable usage, minimize cost & carbon
+Goal: Maximize renewable usage and minimize cost and carbon
 """)
 
 # ================= WEATHER =================
@@ -30,12 +30,14 @@ def get_weather():
 
 data = get_weather()
 
-# 🔴 Safety check (prevents crash)
 if "list" not in data:
     st.error("Weather API failed. Check API key or internet.")
     st.stop()
 
-times, temp, wind, cloud = [], [], [], []
+times = []
+temp = []
+wind = []
+cloud = []
 
 for i in range(8):
     entry = data["list"][i]
@@ -52,19 +54,19 @@ df = pd.DataFrame({
 })
 
 # ================= USER INPUT =================
-st.sidebar.header("⚙️ System Design")
+st.sidebar.header("System Design")
 
-solar_kw = st.sidebar.slider("☀️ Solar Capacity (kW)", 1, 10, 3)
-wind_kw = st.sidebar.slider("🌬 Wind Capacity (kW)", 0, 5, 1)
-battery_capacity = st.sidebar.slider("🔋 Battery (kWh)", 5, 25, 10)
+solar_kw = st.sidebar.slider("Solar Capacity (kW)", 1, 10, 3)
+wind_kw = st.sidebar.slider("Wind Capacity (kW)", 0, 5, 1)
+battery_capacity = st.sidebar.slider("Battery (kWh)", 5, 25, 10)
 battery_level = st.sidebar.slider("Initial Battery (%)", 10, 100, 50)
-biomass_power = st.sidebar.slider("🔥 Biomass (kW)", 0.5, 3.0, 1.0)
+biomass_power = st.sidebar.slider("Biomass (kW)", 0.5, 3.0, 1.0)
 
-grid_enabled = st.sidebar.checkbox("⚡ Grid Connection", True)
+grid_enabled = st.sidebar.checkbox("Grid Connection", True)
 grid_power = st.sidebar.slider("Grid Limit (kW)", 0.5, 5.0, 2.0)
 
 # ================= LOAD SCENARIOS =================
-st.sidebar.header("🏘 Village Load Scenario")
+st.sidebar.header("Village Load Scenario")
 
 scenario = st.sidebar.selectbox("Select Scenario", [
     "Small Village (10 homes)",
@@ -84,7 +86,7 @@ else:
 
 # ================= MODELS =================
 def solar_model(cloud, capacity):
-    irradiance = 1000 * (1 - cloud/100)
+    irradiance = 1000 * (1 - cloud / 100)
     efficiency = 0.18
     return max(0, (irradiance * efficiency * capacity) / 1000)
 
@@ -92,7 +94,7 @@ def wind_model(speed, capacity):
     if speed < 3:
         return 0
     elif speed < 12:
-        return capacity * (speed/12)**3
+        return capacity * (speed / 12) ** 3
     else:
         return capacity
 
@@ -121,9 +123,12 @@ rf_output = [rf_ok_adjustment(s, w) for s, w in zip(solar, wind_gen)]
 load_pattern = [0.6, 0.8, 1.2, 1.5, 1.3, 0.9, 0.7, 0.5]
 
 # ================= SIMULATION =================
-battery = battery_level/100 * battery_capacity
-battery_series, decision_series = [], []
-grid_series, biomass_series = [], []
+battery = battery_level / 100 * battery_capacity
+
+battery_series = []
+decision_series = []
+grid_series = []
+biomass_series = []
 carbon_emissions = []
 
 battery_eff = 0.9
@@ -153,18 +158,17 @@ for i in range(len(df)):
             if grid_enabled and grid_power > deficit:
                 grid_use = deficit
                 decision = "Grid"
-
             else:
                 biomass_use = deficit
                 decision = "Biomass"
 
     co2 = (grid_use * 0.82) + (biomass_use * 0.45)
-    carbon_emissions.append(co2)
 
     battery_series.append(battery)
     decision_series.append(decision)
     grid_series.append(grid_use)
     biomass_series.append(biomass_use)
+    carbon_emissions.append(co2)
 
 # ================= DATA =================
 df["Solar"] = solar
@@ -176,7 +180,7 @@ df["Biomass"] = biomass_series
 df["CO2"] = carbon_emissions
 
 # ================= ECONOMICS =================
-st.subheader("💰 Economic Analysis")
+st.subheader("Economic Analysis")
 
 solar_cost = solar_kw * 60000
 wind_cost = wind_kw * 120000
@@ -196,12 +200,12 @@ annual_savings = annual_energy * grid_cost_per_kwh
 payback = total_capex / annual_savings
 
 c1, c2, c3 = st.columns(3)
-c1.metric("Total System Cost (₹)", int(total_capex))
-c2.metric("Cost per kWh (₹)", round(lcoe, 2))
+c1.metric("Total System Cost (Rs)", int(total_capex))
+c2.metric("Cost per kWh (Rs)", round(lcoe, 2))
 c3.metric("Payback Period (years)", round(payback, 2))
 
-# ================= EFFICIENCY METRIC =================
-st.subheader("⚡ Efficiency Metrics")
+# ================= EFFICIENCY =================
+st.subheader("Efficiency Metrics")
 
 total_energy = sum(df["Solar"]) + sum(df["Wind"]) + sum(df["Grid"]) + sum(df["Biomass"])
 
@@ -213,10 +217,10 @@ else:
 st.metric("Renewable Fraction (%)", round(renewable_fraction * 100, 2))
 
 # ================= LIVE =================
-st.subheader("🔴 Live Simulation")
+st.subheader("Live Simulation")
 
 for i in range(len(df)):
-    st.markdown(f"### ⏱ {df['Time'][i]}")
+    st.write("Time:", df["Time"][i])
 
     c1, c2, c3, c4 = st.columns(4)
 
@@ -225,13 +229,13 @@ for i in range(len(df)):
     c3.metric("Battery", round(df["Battery"][i], 2))
     c4.metric("Grid", round(df["Grid"][i], 2))
 
-    time.sleep(0.3)
+    time.sleep(0.2)
 
 # ================= GRAPHS =================
-st.subheader("📈 Energy Output")
+st.subheader("Energy Output")
 st.line_chart(df.set_index("Time")[["Solar", "Wind", "AI_Output"]])
 
-st.subheader("🔋 Battery")
+st.subheader("Battery")
 st.line_chart(df.set_index("Time")["Battery"])
 
 # ================= ENERGY MIX =================
@@ -245,17 +249,17 @@ energy_mix = pd.DataFrame({
     ]
 })
 
-st.subheader("⚡ Energy Mix")
+st.subheader("Energy Mix")
 st.bar_chart(energy_mix.set_index("Source"))
 
 # ================= CARBON =================
-st.subheader("🌍 Carbon Footprint")
+st.subheader("Carbon Footprint")
 
 total_co2 = sum(df["CO2"])
-st.metric("CO₂ Emissions (kg)", round(total_co2, 2))
+st.metric("CO2 Emissions (kg)", round(total_co2, 2))
 
 # ================= DIAGNOSTICS =================
-st.subheader("⚙️ Diagnostics")
+st.subheader("Diagnostics")
 
-st.write(f"Total Energy: {round(sum(df['AI_Output']), 2)} kWh")
-st.write(f"Efficiency: {round((sum(df['AI_Output'])/(load_base*len(df)))*100, 2)} %")
+st.write("Total Energy:", round(sum(df["AI_Output"]), 2), "kWh")
+st.write("Efficiency:", round((sum(df["AI_Output"]) / (load_base * len(df))) * 100, 2), "%")
