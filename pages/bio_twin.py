@@ -34,10 +34,7 @@ if "list" not in data:
     st.error("Weather API failed. Check API key or internet.")
     st.stop()
 
-times = []
-temp = []
-wind = []
-cloud = []
+times, temp, wind, cloud = [], [], [], []
 
 for i in range(8):
     entry = data["list"][i]
@@ -140,9 +137,21 @@ for i in range(len(df)):
     grid_use = 0
     biomass_use = 0
 
+    # ===== UPDATED LOGIC WITH GRID EXPORT =====
     if generation >= load:
-        battery = min(battery_capacity, battery + (generation - load) * battery_eff)
-        decision = "Renewables"
+        surplus = generation - load
+
+        available_capacity = battery_capacity - battery
+        charge = min(surplus * battery_eff, available_capacity)
+        battery += charge
+
+        export = surplus - charge
+
+        if grid_enabled and export > 0:
+            grid_use = -export  # negative = export
+            decision = "Grid Export"
+        else:
+            decision = "Renewables"
 
     else:
         deficit = load - generation
@@ -162,7 +171,11 @@ for i in range(len(df)):
                 biomass_use = deficit
                 decision = "Biomass"
 
-    co2 = (grid_use * 0.82) + (biomass_use * 0.45)
+    # Carbon calculation
+    if grid_use >= 0:
+        co2 = (grid_use * 0.82) + (biomass_use * 0.45)
+    else:
+        co2 = (biomass_use * 0.45)
 
     battery_series.append(battery)
     decision_series.append(decision)
@@ -199,10 +212,16 @@ annual_savings = annual_energy * grid_cost_per_kwh
 
 payback = total_capex / annual_savings
 
-c1, c2, c3 = st.columns(3)
+# ===== NEW: Export revenue =====
+feed_in_tariff = 4
+exported_energy = sum([abs(x) for x in df["Grid"] if x < 0])
+export_revenue = exported_energy * feed_in_tariff
+
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total System Cost (Rs)", int(total_capex))
 c2.metric("Cost per kWh (Rs)", round(lcoe, 2))
 c3.metric("Payback Period (years)", round(payback, 2))
+c4.metric("Grid Export Revenue (Rs)", round(export_revenue, 2))
 
 # ================= EFFICIENCY =================
 st.subheader("Efficiency Metrics")
@@ -227,7 +246,7 @@ for i in range(len(df)):
     c1.metric("Solar", round(df["Solar"][i], 2))
     c2.metric("Wind", round(df["Wind"][i], 2))
     c3.metric("Battery", round(df["Battery"][i], 2))
-    c4.metric("Grid", round(df["Grid"][i], 2))
+    c4.metric("Grid (+import / -export)", round(df["Grid"][i], 2))
 
     time.sleep(0.2)
 
@@ -240,11 +259,11 @@ st.line_chart(df.set_index("Time")["Battery"])
 
 # ================= ENERGY MIX =================
 energy_mix = pd.DataFrame({
-    "Source": ["Solar", "Wind", "Grid", "Biomass"],
+    "Source": ["Solar", "Wind", "Grid Import", "Biomass"],
     "Energy": [
         sum(df["Solar"]),
         sum(df["Wind"]),
-        sum(df["Grid"]),
+        sum([x for x in df["Grid"] if x > 0]),
         sum(df["Biomass"])
     ]
 })
