@@ -30,6 +30,11 @@ def get_weather():
 
 data = get_weather()
 
+# 🔴 Safety check (prevents crash)
+if "list" not in data:
+    st.error("Weather API failed. Check API key or internet.")
+    st.stop()
+
 times, temp, wind, cloud = [], [], [], []
 
 for i in range(8):
@@ -77,15 +82,12 @@ elif scenario == "Large Village (50 homes)":
 else:
     load_base = st.sidebar.slider("Custom Load (kW)", 0.5, 10.0, 3.0)
 
-# ================= IMPROVED MODELS =================
-
-# Solar with irradiance + efficiency
+# ================= MODELS =================
 def solar_model(cloud, capacity):
-    irradiance = 1000 * (1 - cloud/100)  # W/m2
+    irradiance = 1000 * (1 - cloud/100)
     efficiency = 0.18
     return max(0, (irradiance * efficiency * capacity) / 1000)
 
-# Wind with power curve
 def wind_model(speed, capacity):
     if speed < 3:
         return 0
@@ -94,7 +96,6 @@ def wind_model(speed, capacity):
     else:
         return capacity
 
-# Synaptic smoothing (UNCHANGED)
 def synaptic_memory(series, alpha=0.6):
     smoothed = []
     prev = series[0]
@@ -104,7 +105,6 @@ def synaptic_memory(series, alpha=0.6):
         prev = new_val
     return smoothed
 
-# RF-OK adjustment (UNCHANGED)
 def rf_ok_adjustment(solar, wind):
     return solar * 0.9 + wind * 1.1
 
@@ -117,7 +117,7 @@ wind_gen = synaptic_memory(wind_gen)
 
 rf_output = [rf_ok_adjustment(s, w) for s, w in zip(solar, wind_gen)]
 
-# ================= REALISTIC LOAD PROFILE =================
+# ================= LOAD PROFILE =================
 load_pattern = [0.6, 0.8, 1.2, 1.5, 1.3, 0.9, 0.7, 0.5]
 
 # ================= SIMULATION =================
@@ -197,17 +197,20 @@ payback = total_capex / annual_savings
 
 c1, c2, c3 = st.columns(3)
 c1.metric("Total System Cost (₹)", int(total_capex))
-c2.metric("Cost per kWh (₹)", round(lcoe,2))
-c3.metric("Payback Period (years)", round(payback,2))
+c2.metric("Cost per kWh (₹)", round(lcoe, 2))
+c3.metric("Payback Period (years)", round(payback, 2))
 
-# ================= NEW EFFICIENCY METRICS =================
+# ================= EFFICIENCY METRIC =================
 st.subheader("⚡ Efficiency Metrics")
 
-renewable_fraction = (sum(df["Solar"]) + sum(df["Wind"])) / (
-    sum(df["Solar"]) + sum(df["Wind"]) + sum(df["Grid"]) + sum(df["Biomass"])
-)
+total_energy = sum(df["Solar"]) + sum(df["Wind"]) + sum(df["Grid"]) + sum(df["Biomass"])
 
-st.metric("Renewable Fraction (%)", round(renewable_fraction*100,2))
+if total_energy > 0:
+    renewable_fraction = (sum(df["Solar"]) + sum(df["Wind"])) / total_energy
+else:
+    renewable_fraction = 0
+
+st.metric("Renewable Fraction (%)", round(renewable_fraction * 100, 2))
 
 # ================= LIVE =================
 st.subheader("🔴 Live Simulation")
@@ -217,10 +220,10 @@ for i in range(len(df)):
 
     c1, c2, c3, c4 = st.columns(4)
 
-    c1.metric("Solar", round(df["Solar"][i],2))
-    c2.metric("Wind", round(df["Wind"][i],2))
-    c3.metric("Battery", round(df["Battery"][i],2))
-    c4.metric("Grid", round(df["Grid"][i],2))
+    c1.metric("Solar", round(df["Solar"][i], 2))
+    c2.metric("Wind", round(df["Wind"][i], 2))
+    c3.metric("Battery", round(df["Battery"][i], 2))
+    c4.metric("Grid", round(df["Grid"][i], 2))
 
     time.sleep(0.3)
 
@@ -249,10 +252,10 @@ st.bar_chart(energy_mix.set_index("Source"))
 st.subheader("🌍 Carbon Footprint")
 
 total_co2 = sum(df["CO2"])
-st.metric("CO₂ Emissions (kg)", round(total_co2,2))
+st.metric("CO₂ Emissions (kg)", round(total_co2, 2))
 
 # ================= DIAGNOSTICS =================
 st.subheader("⚙️ Diagnostics")
 
-st.write(f"Total Energy: {round(sum(df['AI_Output']),2)} kWh")
-st.write(f"Efficiency: {round((sum(df['AI_Output'])/(load_base*len(df)))*100,2)} %")
+st.write(f"Total Energy: {round(sum(df['AI_Output']), 2)} kWh")
+st.write(f"Efficiency: {round((sum(df['AI_Output'])/(load_base*len(df)))*100, 2)} %")
