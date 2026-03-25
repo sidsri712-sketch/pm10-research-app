@@ -161,14 +161,14 @@ for i in range(len(df)):
     else:
         deficit = load - generation
 
-        # 1️⃣ BIOMASS FIRST
+        # 🔴 Biomass ONLY because renewable is insufficient
         biomass_supply = min(deficit, biomass_power)
         biomass_use = biomass_supply
         deficit -= biomass_supply
 
         biogas_extra = max(0, biomass_power - biomass_use)
 
-        # 2️⃣ BATTERY
+        # Battery AFTER biomass (unchanged priority)
         if deficit > 0:
             possible_supply = battery * battery_eff
 
@@ -179,7 +179,7 @@ for i in range(len(df)):
                 deficit -= possible_supply
                 battery = 0
 
-        # 3️⃣ GRID LAST
+        # Grid LAST
         if deficit > 0 and grid_enabled:
             grid_use = min(deficit, grid_power)
             deficit -= grid_use
