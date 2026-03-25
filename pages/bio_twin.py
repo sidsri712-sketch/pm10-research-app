@@ -127,6 +127,7 @@ decision_series = []
 grid_series = []
 biomass_series = []
 carbon_emissions = []
+biogas_diverted = []
 
 battery_eff = 0.9
 
@@ -136,42 +137,63 @@ for i in range(len(df)):
 
     grid_use = 0
     biomass_use = 0
+    biogas_extra = 0
 
-    # ===== UPDATED LOGIC WITH GRID EXPORT =====
+    # ===== SURPLUS CASE =====
     if generation >= load:
         surplus = generation - load
 
         available_capacity = battery_capacity - battery
-        charge = min(surplus * battery_eff, available_capacity)
-        battery += charge
 
-        export = surplus - charge
+        charge_input = min(surplus, available_capacity / battery_eff)
+        charge_stored = charge_input * battery_eff
+        battery += charge_stored
+
+        export = surplus - charge_input
 
         if grid_enabled and export > 0:
-            grid_use = -export  # negative = export
+            export = min(export, grid_power)
+            grid_use = -export
             decision = "Grid Export"
         else:
             decision = "Renewables"
 
+        biomass_use = 0
+        biogas_extra = biomass_power
+
+    # ===== DEFICIT CASE =====
     else:
         deficit = load - generation
 
-        if battery > deficit:
+        possible_supply = battery * battery_eff
+
+        if possible_supply >= deficit:
             battery -= deficit / battery_eff
             decision = "Battery"
+            biogas_extra = biomass_power
 
         else:
-            deficit -= battery
+            deficit -= possible_supply
             battery = 0
 
-            if grid_enabled and grid_power > deficit:
-                grid_use = deficit
-                decision = "Grid"
-            else:
-                biomass_use = deficit
-                decision = "Biomass"
+            if grid_enabled:
+                grid_draw = min(deficit, grid_power)
 
-    # Carbon calculation
+                if grid_draw > 0:
+                    grid_use = grid_draw
+                    deficit -= grid_draw
+                    decision = "Grid"
+                else:
+                    decision = "Grid Limit Hit"
+
+            if deficit > 0:
+                biomass_use = deficit
+                biogas_extra = max(0, biomass_power - biomass_use)
+                decision = "Biomass"
+            else:
+                biogas_extra = biomass_power
+
+    # ================= CARBON =================
     if grid_use >= 0:
         co2 = (grid_use * 0.82) + (biomass_use * 0.45)
     else:
@@ -182,6 +204,7 @@ for i in range(len(df)):
     grid_series.append(grid_use)
     biomass_series.append(biomass_use)
     carbon_emissions.append(co2)
+    biogas_diverted.append(biogas_extra)
 
 # ================= DATA =================
 df["Solar"] = solar
@@ -191,6 +214,7 @@ df["Battery"] = battery_series
 df["Grid"] = grid_series
 df["Biomass"] = biomass_series
 df["CO2"] = carbon_emissions
+df["Biogas_Diverted"] = biogas_diverted
 
 # ================= ECONOMICS =================
 st.subheader("Economic Analysis")
@@ -212,7 +236,6 @@ annual_savings = annual_energy * grid_cost_per_kwh
 
 payback = total_capex / annual_savings
 
-# ===== NEW: Export revenue =====
 feed_in_tariff = 4
 exported_energy = sum([abs(x) for x in df["Grid"] if x < 0])
 export_revenue = exported_energy * feed_in_tariff
@@ -228,11 +251,7 @@ st.subheader("Efficiency Metrics")
 
 total_energy = sum(df["Solar"]) + sum(df["Wind"]) + sum(df["Grid"]) + sum(df["Biomass"])
 
-if total_energy > 0:
-    renewable_fraction = (sum(df["Solar"]) + sum(df["Wind"])) / total_energy
-else:
-    renewable_fraction = 0
-
+renewable_fraction = (sum(df["Solar"]) + sum(df["Wind"])) / total_energy if total_energy > 0 else 0
 st.metric("Renewable Fraction (%)", round(renewable_fraction * 100, 2))
 
 # ================= LIVE =================
@@ -242,7 +261,6 @@ for i in range(len(df)):
     st.write("Time:", df["Time"][i])
 
     c1, c2, c3, c4 = st.columns(4)
-
     c1.metric("Solar", round(df["Solar"][i], 2))
     c2.metric("Wind", round(df["Wind"][i], 2))
     c3.metric("Battery", round(df["Battery"][i], 2))
