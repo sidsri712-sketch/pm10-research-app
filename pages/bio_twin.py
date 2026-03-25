@@ -139,59 +139,53 @@ for i in range(len(df)):
     biomass_use = 0
     biogas_extra = 0
 
-    # ===== SURPLUS CASE =====
+    # ===== SURPLUS =====
     if generation >= load:
         surplus = generation - load
 
         available_capacity = battery_capacity - battery
-
         charge_input = min(surplus, available_capacity / battery_eff)
-        charge_stored = charge_input * battery_eff
-        battery += charge_stored
+        battery += charge_input * battery_eff
 
         export = surplus - charge_input
 
         if grid_enabled and export > 0:
-            export = min(export, grid_power)
-            grid_use = -export
+            grid_use = -min(export, grid_power)
             decision = "Grid Export"
         else:
             decision = "Renewables"
 
-        biomass_use = 0
         biogas_extra = biomass_power
 
-    # ===== DEFICIT CASE =====
+    # ===== DEFICIT =====
     else:
         deficit = load - generation
 
-        possible_supply = battery * battery_eff
+        # 1️⃣ BIOMASS FIRST
+        biomass_supply = min(deficit, biomass_power)
+        biomass_use = biomass_supply
+        deficit -= biomass_supply
 
-        if possible_supply >= deficit:
-            battery -= deficit / battery_eff
-            decision = "Battery"
-            biogas_extra = biomass_power
+        biogas_extra = max(0, biomass_power - biomass_use)
 
-        else:
-            deficit -= possible_supply
-            battery = 0
+        # 2️⃣ BATTERY
+        if deficit > 0:
+            possible_supply = battery * battery_eff
 
-            if grid_enabled:
-                grid_draw = min(deficit, grid_power)
-
-                if grid_draw > 0:
-                    grid_use = grid_draw
-                    deficit -= grid_draw
-                    decision = "Grid"
-                else:
-                    decision = "Grid Limit Hit"
-
-            if deficit > 0:
-                biomass_use = deficit
-                biogas_extra = max(0, biomass_power - biomass_use)
-                decision = "Biomass"
+            if possible_supply >= deficit:
+                battery -= deficit / battery_eff
+                deficit = 0
             else:
-                biogas_extra = biomass_power
+                deficit -= possible_supply
+                battery = 0
+
+        # 3️⃣ GRID LAST
+        if deficit > 0 and grid_enabled:
+            grid_use = min(deficit, grid_power)
+            deficit -= grid_use
+            decision = "Grid Support"
+        else:
+            decision = "Renewables + Biomass"
 
     # ================= CARBON =================
     if grid_use >= 0:
