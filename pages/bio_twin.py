@@ -130,7 +130,7 @@ carbon_emissions = []
 biogas_diverted = []
 
 battery_eff = 0.9
-battery_min = 0.2 * battery_capacity   # 🔒 20% reserve
+battery_min = 0.2 * battery_capacity
 
 for i in range(len(df)):
     load = load_base * load_pattern[i]
@@ -139,8 +139,8 @@ for i in range(len(df)):
     grid_use = 0
     biomass_use = 0
     biogas_extra = 0
+    decision = "Idle"   # ✅ FIX ADDED HERE
 
-    # ===== SURPLUS =====
     if generation >= load:
         surplus = generation - load
 
@@ -158,18 +158,15 @@ for i in range(len(df)):
 
         biogas_extra = biomass_power
 
-    # ===== DEFICIT =====
     else:
         deficit = load - generation
 
-        # 1️⃣ BIOMASS FIRST
         biomass_supply = min(deficit, biomass_power)
         biomass_use = biomass_supply
         deficit -= biomass_supply
 
         biogas_extra = max(0, biomass_power - biomass_use)
 
-        # 2️⃣ BATTERY (WITH RESERVE)
         if deficit > 0:
             usable_battery = max(0, battery - battery_min)
             possible_supply = usable_battery * battery_eff
@@ -183,13 +180,11 @@ for i in range(len(df)):
                 deficit -= possible_supply
                 decision = "Biomass + Battery"
 
-        # 3️⃣ GRID LAST
         if deficit > 0 and grid_enabled:
             grid_use = min(deficit, grid_power)
             deficit -= grid_use
             decision = "Grid Support"
 
-    # ================= CARBON =================
     if grid_use >= 0:
         co2 = (grid_use * 0.82) + (biomass_use * 0.45)
     else:
