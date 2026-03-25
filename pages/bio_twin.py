@@ -130,6 +130,7 @@ carbon_emissions = []
 biogas_diverted = []
 
 battery_eff = 0.9
+battery_min = 0.2 * battery_capacity   # 🔒 20% reserve
 
 for i in range(len(df)):
     load = load_base * load_pattern[i]
@@ -161,31 +162,32 @@ for i in range(len(df)):
     else:
         deficit = load - generation
 
-        # 🔴 Biomass ONLY because renewable is insufficient
+        # 1️⃣ BIOMASS FIRST
         biomass_supply = min(deficit, biomass_power)
         biomass_use = biomass_supply
         deficit -= biomass_supply
 
         biogas_extra = max(0, biomass_power - biomass_use)
 
-        # Battery AFTER biomass (unchanged priority)
+        # 2️⃣ BATTERY (WITH RESERVE)
         if deficit > 0:
-            possible_supply = battery * battery_eff
+            usable_battery = max(0, battery - battery_min)
+            possible_supply = usable_battery * battery_eff
 
             if possible_supply >= deficit:
                 battery -= deficit / battery_eff
                 deficit = 0
+                decision = "Biomass + Battery"
             else:
+                battery -= usable_battery
                 deficit -= possible_supply
-                battery = 0
+                decision = "Biomass + Battery"
 
-        # Grid LAST
+        # 3️⃣ GRID LAST
         if deficit > 0 and grid_enabled:
             grid_use = min(deficit, grid_power)
             deficit -= grid_use
             decision = "Grid Support"
-        else:
-            decision = "Renewables + Biomass"
 
     # ================= CARBON =================
     if grid_use >= 0:
