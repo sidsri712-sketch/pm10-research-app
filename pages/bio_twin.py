@@ -5,7 +5,7 @@ import numpy as np
 import time
 
 # ================= CONFIG =================
-API_KEY = "c86236be4a9f76875aad940c96e5111b"
+API_KEY = ""c86236be4a9f76875aad940c96e5111b"
 CITY = "Lucknow"
 
 st.set_page_config(layout="wide")
@@ -13,27 +13,14 @@ st.title("⚡ Hybrid Renewable Energy BioTwin (SynaptikRig-RF)")
 
 # ================= ONBOARDING =================
 with st.expander("📘 Understand This App (Simple Explanation)"):
-
     st.markdown("""
-### 🌍 What This App Simulates
-A real hybrid power system (solar + wind + battery + biomass + grid)
+### 🌍 Hybrid Energy System
+Solar + Wind + Battery + Biomass + Grid
 
----
+X-axis → Time  
+Y-axis → Power (kW) / Energy (kWh)
 
-### 📊 Graph Meaning
-Energy Output:
-- X-axis → Time (3-hour intervals)
-- Y-axis → Power (kW)
-
-Battery:
-- X-axis → Time
-- Y-axis → Energy (kWh)
-
----
-
-### 🎯 Goal
-Maximize renewable usage  
-Minimize cost + carbon
+Goal → Maximize renewable usage, minimize cost & carbon
 """)
 
 # ================= WEATHER =================
@@ -90,13 +77,24 @@ elif scenario == "Large Village (50 homes)":
 else:
     load_base = st.sidebar.slider("Custom Load (kW)", 0.5, 10.0, 3.0)
 
-# ================= MODELS =================
+# ================= IMPROVED MODELS =================
+
+# Solar with irradiance + efficiency
 def solar_model(cloud, capacity):
-    return max(0, (100 - cloud)/100 * capacity)
+    irradiance = 1000 * (1 - cloud/100)  # W/m2
+    efficiency = 0.18
+    return max(0, (irradiance * efficiency * capacity) / 1000)
 
+# Wind with power curve
 def wind_model(speed, capacity):
-    return min(capacity, (speed**3)/50)
+    if speed < 3:
+        return 0
+    elif speed < 12:
+        return capacity * (speed/12)**3
+    else:
+        return capacity
 
+# Synaptic smoothing (UNCHANGED)
 def synaptic_memory(series, alpha=0.6):
     smoothed = []
     prev = series[0]
@@ -106,6 +104,7 @@ def synaptic_memory(series, alpha=0.6):
         prev = new_val
     return smoothed
 
+# RF-OK adjustment (UNCHANGED)
 def rf_ok_adjustment(solar, wind):
     return solar * 0.9 + wind * 1.1
 
@@ -118,28 +117,33 @@ wind_gen = synaptic_memory(wind_gen)
 
 rf_output = [rf_ok_adjustment(s, w) for s, w in zip(solar, wind_gen)]
 
+# ================= REALISTIC LOAD PROFILE =================
+load_pattern = [0.6, 0.8, 1.2, 1.5, 1.3, 0.9, 0.7, 0.5]
+
 # ================= SIMULATION =================
 battery = battery_level/100 * battery_capacity
 battery_series, decision_series = [], []
 grid_series, biomass_series = [], []
 carbon_emissions = []
 
+battery_eff = 0.9
+
 for i in range(len(df)):
-    load = load_base + np.random.uniform(-0.3, 0.3)
+    load = load_base * load_pattern[i]
     generation = rf_output[i]
 
     grid_use = 0
     biomass_use = 0
 
     if generation >= load:
-        battery = min(battery_capacity, battery + (generation - load))
+        battery = min(battery_capacity, battery + (generation - load) * battery_eff)
         decision = "Renewables"
 
     else:
         deficit = load - generation
 
         if battery > deficit:
-            battery -= deficit
+            battery -= deficit / battery_eff
             decision = "Battery"
 
         else:
@@ -154,7 +158,6 @@ for i in range(len(df)):
                 biomass_use = deficit
                 decision = "Biomass"
 
-    # Carbon (kg CO2)
     co2 = (grid_use * 0.82) + (biomass_use * 0.45)
     carbon_emissions.append(co2)
 
@@ -175,7 +178,6 @@ df["CO2"] = carbon_emissions
 # ================= ECONOMICS =================
 st.subheader("💰 Economic Analysis")
 
-# CAPEX (₹)
 solar_cost = solar_kw * 60000
 wind_cost = wind_kw * 120000
 battery_cost = battery_capacity * 15000
@@ -183,14 +185,11 @@ biomass_cost = biomass_power * 40000
 
 total_capex = solar_cost + wind_cost + battery_cost + biomass_cost
 
-# Annual energy estimate
 daily_energy = sum(df["AI_Output"])
 annual_energy = daily_energy * 365
 
-# LCOE (₹/kWh)
-lcoe = total_capex / (annual_energy * 10)  # 10-year life
+lcoe = total_capex / (annual_energy * 10)
 
-# Grid cost comparison
 grid_cost_per_kwh = 8
 annual_savings = annual_energy * grid_cost_per_kwh
 
@@ -200,6 +199,15 @@ c1, c2, c3 = st.columns(3)
 c1.metric("Total System Cost (₹)", int(total_capex))
 c2.metric("Cost per kWh (₹)", round(lcoe,2))
 c3.metric("Payback Period (years)", round(payback,2))
+
+# ================= NEW EFFICIENCY METRICS =================
+st.subheader("⚡ Efficiency Metrics")
+
+renewable_fraction = (sum(df["Solar"]) + sum(df["Wind"])) / (
+    sum(df["Solar"]) + sum(df["Wind"]) + sum(df["Grid"]) + sum(df["Biomass"])
+)
+
+st.metric("Renewable Fraction (%)", round(renewable_fraction*100,2))
 
 # ================= LIVE =================
 st.subheader("🔴 Live Simulation")
