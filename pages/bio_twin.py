@@ -119,7 +119,7 @@ rf_output = [rf_ok_adjustment(s, w) for s, w in zip(solar, wind_gen)]
 # ================= LOAD PROFILE =================
 load_pattern = [0.6, 0.8, 1.2, 1.5, 1.3, 0.9, 0.7, 0.5]
 
-# ================= SIMULATION =================
+# ================= SIMULATION (FIXED ONLY HERE) =================
 battery = battery_level / 100 * battery_capacity
 
 battery_series = []
@@ -127,6 +127,7 @@ decision_series = []
 grid_series = []
 biomass_series = []
 carbon_emissions = []
+biogas_diverted = []
 
 battery_eff = 0.9
 
@@ -136,22 +137,28 @@ for i in range(len(df)):
 
     grid_use = 0
     biomass_use = 0
+    biogas_extra = 0
 
-    # ===== UPDATED LOGIC WITH GRID EXPORT =====
     if generation >= load:
         surplus = generation - load
 
         available_capacity = battery_capacity - battery
-        charge = min(surplus * battery_eff, available_capacity)
-        battery += charge
 
-        export = surplus - charge
+        charge_input = min(surplus, available_capacity / battery_eff)
+        charge_stored = charge_input * battery_eff
+        battery += charge_stored
+
+        export = surplus - charge_input
 
         if grid_enabled and export > 0:
-            grid_use = -export  # negative = export
+            export = min(export, grid_power)
+            grid_use = -export
             decision = "Grid Export"
         else:
             decision = "Renewables"
+
+        biomass_use = 0
+        biogas_extra = biomass_power
 
     else:
         deficit = load - generation
@@ -159,6 +166,7 @@ for i in range(len(df)):
         if battery > deficit:
             battery -= deficit / battery_eff
             decision = "Battery"
+            biogas_extra = biomass_power
 
         else:
             deficit -= battery
@@ -167,11 +175,13 @@ for i in range(len(df)):
             if grid_enabled and grid_power > deficit:
                 grid_use = deficit
                 decision = "Grid"
+                biogas_extra = biomass_power
+
             else:
                 biomass_use = deficit
+                biogas_extra = max(0, biomass_power - biomass_use)
                 decision = "Biomass"
 
-    # Carbon calculation
     if grid_use >= 0:
         co2 = (grid_use * 0.82) + (biomass_use * 0.45)
     else:
@@ -182,6 +192,7 @@ for i in range(len(df)):
     grid_series.append(grid_use)
     biomass_series.append(biomass_use)
     carbon_emissions.append(co2)
+    biogas_diverted.append(biogas_extra)
 
 # ================= DATA =================
 df["Solar"] = solar
@@ -191,94 +202,4 @@ df["Battery"] = battery_series
 df["Grid"] = grid_series
 df["Biomass"] = biomass_series
 df["CO2"] = carbon_emissions
-
-# ================= ECONOMICS =================
-st.subheader("Economic Analysis")
-
-solar_cost = solar_kw * 60000
-wind_cost = wind_kw * 120000
-battery_cost = battery_capacity * 15000
-biomass_cost = biomass_power * 40000
-
-total_capex = solar_cost + wind_cost + battery_cost + biomass_cost
-
-daily_energy = sum(df["AI_Output"])
-annual_energy = daily_energy * 365
-
-lcoe = total_capex / (annual_energy * 10)
-
-grid_cost_per_kwh = 8
-annual_savings = annual_energy * grid_cost_per_kwh
-
-payback = total_capex / annual_savings
-
-# ===== NEW: Export revenue =====
-feed_in_tariff = 4
-exported_energy = sum([abs(x) for x in df["Grid"] if x < 0])
-export_revenue = exported_energy * feed_in_tariff
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total System Cost (Rs)", int(total_capex))
-c2.metric("Cost per kWh (Rs)", round(lcoe, 2))
-c3.metric("Payback Period (years)", round(payback, 2))
-c4.metric("Grid Export Revenue (Rs)", round(export_revenue, 2))
-
-# ================= EFFICIENCY =================
-st.subheader("Efficiency Metrics")
-
-total_energy = sum(df["Solar"]) + sum(df["Wind"]) + sum(df["Grid"]) + sum(df["Biomass"])
-
-if total_energy > 0:
-    renewable_fraction = (sum(df["Solar"]) + sum(df["Wind"])) / total_energy
-else:
-    renewable_fraction = 0
-
-st.metric("Renewable Fraction (%)", round(renewable_fraction * 100, 2))
-
-# ================= LIVE =================
-st.subheader("Live Simulation")
-
-for i in range(len(df)):
-    st.write("Time:", df["Time"][i])
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric("Solar", round(df["Solar"][i], 2))
-    c2.metric("Wind", round(df["Wind"][i], 2))
-    c3.metric("Battery", round(df["Battery"][i], 2))
-    c4.metric("Grid (+import / -export)", round(df["Grid"][i], 2))
-
-    time.sleep(0.2)
-
-# ================= GRAPHS =================
-st.subheader("Energy Output")
-st.line_chart(df.set_index("Time")[["Solar", "Wind", "AI_Output"]])
-
-st.subheader("Battery")
-st.line_chart(df.set_index("Time")["Battery"])
-
-# ================= ENERGY MIX =================
-energy_mix = pd.DataFrame({
-    "Source": ["Solar", "Wind", "Grid Import", "Biomass"],
-    "Energy": [
-        sum(df["Solar"]),
-        sum(df["Wind"]),
-        sum([x for x in df["Grid"] if x > 0]),
-        sum(df["Biomass"])
-    ]
-})
-
-st.subheader("Energy Mix")
-st.bar_chart(energy_mix.set_index("Source"))
-
-# ================= CARBON =================
-st.subheader("Carbon Footprint")
-
-total_co2 = sum(df["CO2"])
-st.metric("CO2 Emissions (kg)", round(total_co2, 2))
-
-# ================= DIAGNOSTICS =================
-st.subheader("Diagnostics")
-
-st.write("Total Energy:", round(sum(df["AI_Output"]), 2), "kWh")
-st.write("Efficiency:", round((sum(df["AI_Output"]) / (load_base * len(df))) * 100, 2), "%")
+df["Biogas_Diverted"] = biogas_diverted
