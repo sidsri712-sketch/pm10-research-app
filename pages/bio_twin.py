@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import numpy as np
 import time
+import matplotlib.pyplot as plt
 
 # ================= CONFIG =================
 API_KEY = "c86236be4a9f76875aad940c96e5111b"
@@ -129,14 +130,11 @@ for i in range(len(df)):
 
     decision = "Normal"
 
-    if predicted_solar + predicted_wind < load_base:
-        decision = "⚠️ Pre-Charge Battery"
-
     if generation >= load:
         surplus = generation - load
         charge = min(surplus, battery_capacity - battery)
         battery += charge
-        decision = "Charging"
+        decision = "Charging Battery"
 
     else:
         deficit = load - generation
@@ -158,8 +156,8 @@ st.markdown("## ⚡ Live Dashboard")
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("🏠 Houses", num_houses)
-c2.metric("⚡ Total Energy", round(df["Total_Generation"].sum(), 2))
-c3.metric("🔋 Battery", round(battery, 2))
+c2.metric("⚡ Total Energy (kWh)", round(df["Total_Generation"].sum(), 2))
+c3.metric("🔋 Battery (kWh)", round(battery, 2))
 c4.metric("🌱 Renewable %",
           round((df["Solar"].sum() + df["Wind"].sum()) /
                 df["Total_Generation"].sum() * 100, 2))
@@ -170,16 +168,18 @@ st.markdown("## 🚦 System Status")
 s1, s2, s3 = st.columns(3)
 
 if battery > 0.7 * battery_capacity:
-    s1.success("Battery Healthy")
+    s1.success("🔋 Battery Healthy")
 elif battery > 0.3 * battery_capacity:
-    s1.warning("Battery Moderate")
+    s1.warning("🔋 Battery Moderate")
 else:
-    s1.error("Battery Low")
+    s1.error("🔋 Battery Low")
 
-if predicted_solar + predicted_wind < load_base:
-    s2.error("Outage Risk")
+total_predicted = (predicted_solar + predicted_wind) * num_houses
+
+if total_predicted < load_base:
+    s2.error("⚠️ Outage Risk Tomorrow")
 else:
-    s2.success("Stable")
+    s2.success("✅ Stable Supply")
 
 s3.info(decision_series[-1])
 
@@ -187,20 +187,45 @@ s3.info(decision_series[-1])
 st.markdown("## 🔮 Forecast")
 
 f1, f2, f3 = st.columns(3)
-f1.metric("Solar", round(predicted_solar * num_houses, 2))
-f2.metric("Wind", round(predicted_wind * num_houses, 2))
-f3.metric("Load", round(load_base, 2))
+f1.metric("☀️ Solar", round(predicted_solar * num_houses, 2))
+f2.metric("🌬️ Wind", round(predicted_wind * num_houses, 2))
+f3.metric("⚡ Load", round(load_base, 2))
 
-# ================= CHART =================
-st.markdown("## 📊 Energy Generation")
-st.area_chart(df.set_index("Time")[["Solar", "Wind", "Biomass"]])
+# ================= GRAPH (CLEAR) =================
+st.markdown("## 📊 Energy Generation (kW vs Time)")
 
-# ================= BATTERY =================
-st.markdown("## 🔋 Battery")
-st.line_chart(battery_series)
+fig, ax = plt.subplots()
+
+ax.plot(df["Time"], df["Solar"], label="Solar")
+ax.plot(df["Time"], df["Wind"], label="Wind")
+ax.plot(df["Time"], df["Biomass"], label="Biomass")
+
+ax.set_xlabel("Time")
+ax.set_ylabel("Power (kW)")
+ax.set_title("Energy Generation by Source")
+
+ax.legend()
+plt.xticks(rotation=45)
+
+st.pyplot(fig)
+
+# ================= BATTERY GRAPH =================
+st.markdown("## 🔋 Battery Level (kWh vs Time)")
+
+fig2, ax2 = plt.subplots()
+
+ax2.plot(df["Time"], battery_series)
+
+ax2.set_xlabel("Time")
+ax2.set_ylabel("Battery Level (kWh)")
+ax2.set_title("Battery Storage Dynamics")
+
+plt.xticks(rotation=45)
+
+st.pyplot(fig2)
 
 # ================= HOUSE =================
-st.markdown("## 🏠 Per House")
+st.markdown("## 🏠 Per House Contribution")
 
 for i, house in enumerate(houses):
     total = sum(house["total"])
@@ -213,18 +238,20 @@ for i, house in enumerate(houses):
     c3.metric("Biomass %",
               round(sum(house["biomass"]) / total * 100, 2))
 
-# ================= AI =================
-st.markdown("## 🧠 AI Decision")
+# ================= AI DECISION =================
+st.markdown("## 🧠 AI Decision Engine")
 
-if predicted_solar < 1:
-    st.error("Increase Biomass")
-elif predicted_wind > 5:
-    st.info("Store Wind Energy")
+if total_predicted >= load_base:
+    st.success("✅ Renewable Energy Sufficient")
+elif battery > 0.5 * battery_capacity:
+    st.info("🔋 Use Battery Backup")
+elif biomass_power > 0:
+    st.warning("🔥 Activate Biomass Backup")
 else:
-    st.success("Normal Operation")
+    st.error("⚠️ Power Shortage Risk")
 
 # ================= LIVE =================
-st.markdown("## ⏱️ Simulation")
+st.markdown("## ⏱️ Live Simulation")
 
 progress = st.progress(0)
 
