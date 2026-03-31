@@ -18,7 +18,7 @@ def get_weather():
     return data['main']['humidity'], data['main']['temp']
 
 # ==========================================
-# DATABASE (LOCAL LOGGING)
+# DATABASE
 # ==========================================
 conn = sqlite3.connect("biotwin.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -44,7 +44,22 @@ def log_data(data):
     conn.commit()
 
 # ==========================================
-# DATA GENERATION
+# PHYSICS (NEW ADDITION)
+# ==========================================
+R = 8.314  # J/mol·K
+A = 1.2e3  # pre-exponential factor
+E = 42000  # activation energy (J/mol)
+
+def reaction_rate(temp, naoh, ds):
+    T = temp + 273.15
+    k = A * np.exp(-E/(R*T))
+    return k * naoh * (1 - ds)
+
+def energy_balance(temp, stir, humidity):
+    return temp + 0.02*stir - 0.01*humidity
+
+# ==========================================
+# DATA GENERATION (MODIFIED WITH PHYSICS)
 # ==========================================
 seq_len = 10
 
@@ -58,17 +73,24 @@ def generate_data(n=1000):
         stir = np.random.uniform(200,400)
         mode = np.random.choice([0,1])
 
-        seq, ds = [], 0
+        seq, ds = [], 0.05
         for t in range(seq_len):
+
+            temp_eff = energy_balance(temp, stir, hum)
+
+            rate = reaction_rate(temp_eff, naoh, ds)
+
             if mode==1:
-                ds += naoh*0.12*(t/seq_len)
+                ds += rate * (t/seq_len)
             else:
-                ds = naoh*1.5 if t>3 else naoh*0.4*t
+                ds += rate
 
-            seq.append([temp,press,naoh,hum,stir,mode,ds])
+            ds = min(ds, 1.0)
 
-        viscosity = 0.06*temp + 12*naoh + 2.5*ds
-        moisture = 0.1*hum - 0.02*temp + 3.5
+            seq.append([temp_eff,press,naoh,hum,stir,mode,ds])
+
+        viscosity = 0.06*temp + 15*ds + 10*naoh
+        moisture = 0.1*hum - 0.02*temp + 3.5 - 2*ds
 
         X.append(seq)
         y.append([viscosity, moisture])
@@ -105,7 +127,7 @@ class Model(nn.Module):
         return self.fc(ctx)
 
 # ==========================================
-# TRAIN MODEL (CACHE)
+# TRAIN MODEL
 # ==========================================
 @st.cache_resource
 def train_model():
@@ -136,23 +158,30 @@ def train_model():
 model, scaler_X, scaler_y = train_model()
 
 # ==========================================
-# SIMULATION
+# SIMULATION (PHYSICS APPLIED)
 # ==========================================
 def simulate(temp,press,naoh,hum,stir,mode):
-    seq, ds = [],0
+    seq, ds = [],0.05
     for t in range(seq_len):
+
+        temp_eff = energy_balance(temp, stir, hum)
+        rate = reaction_rate(temp_eff, naoh, ds)
+
         if mode==1:
-            ds += naoh*0.12*(t/seq_len)
+            ds += rate * (t/seq_len)
         else:
-            ds = naoh*1.5 if t>3 else naoh*0.4*t
-        seq.append([temp,press,naoh,hum,stir,mode,ds])
+            ds += rate
+
+        ds = min(ds,1.0)
+
+        seq.append([temp_eff,press,naoh,hum,stir,mode,ds])
 
     seq = scaler_X.transform(np.array(seq)).reshape(1,seq_len,-1)
     pred = model(torch.FloatTensor(seq)).detach().numpy()
     return scaler_y.inverse_transform(pred)[0]
 
 # ==========================================
-# GENETIC OPT (SAFE)
+# GENETIC OPT (UNCHANGED)
 # ==========================================
 def genetic_opt(hum):
     pop = [np.random.uniform([60,180,0.38,200,0],
@@ -182,19 +211,17 @@ def genetic_opt(hum):
 
     best = pop[np.argmax(scores)]
     temp,press,naoh,stir,mode = best
-    mode = int(round(mode)
-    )
+    mode = int(round(mode))
     v,m = simulate(temp,press,naoh,hum,stir,mode)
 
     return temp,press,naoh,stir,mode,v,m
 
 # ==========================================
-# STREAMLIT DASHBOARD
+# STREAMLIT UI (UNCHANGED)
 # ==========================================
 st.set_page_config(layout="wide")
 st.title("🧪 BioTwin Industrial Digital Twin")
 
-# LOGIN
 if "user" not in st.session_state:
     user = st.text_input("Enter Username")
     if st.button("Login"):
@@ -212,7 +239,6 @@ if "user" in st.session_state:
 
     st.divider()
 
-    # INPUTS
     temp = st.slider("Temperature (°C)",60,80,70)
     press = st.slider("Pressure (kPa)",180,250,210)
     naoh = st.slider("NaOH Ratio",0.38,0.44,0.40)
@@ -220,7 +246,6 @@ if "user" in st.session_state:
     mode = st.selectbox("Mode",["Bulk","Stepwise"])
     mode_val = 1 if mode=="Stepwise" else 0
 
-    # PREDICT
     if st.button("Run Prediction"):
         v,m = simulate(temp,press,naoh,hum,stir,mode_val)
 
@@ -230,7 +255,6 @@ if "user" in st.session_state:
         log_data((st.session_state.user,str(datetime.now()),
                   temp,press,naoh,hum,stir,mode,v,m))
 
-    # OPTIMIZE
     if st.button("Optimize Process"):
         best = genetic_opt(hum)
 
@@ -249,7 +273,6 @@ if "user" in st.session_state:
         st.write(f"Viscosity: {v:.2f} Pa·s")
         st.write(f"Moisture: {m:.2f} %")
 
-    # LOGS
     if st.checkbox("Show Logs"):
         import pandas as pd
         df = pd.read_sql("SELECT * FROM logs", conn)
