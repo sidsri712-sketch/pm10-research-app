@@ -1,68 +1,57 @@
+# ==========================================
+# BIO TWIN - FULL STACK (FASTAPI + MODEL)
+# ==========================================
+
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import requests
-import pandas as pd
-import streamlit as st
-import sqlite3
-from datetime import datetime
 from sklearn.preprocessing import StandardScaler
+from fastapi import FastAPI, Header
+from pydantic import BaseModel
+import requests
+from datetime import datetime
+import os
 
 # ==========================================
-#  PARAMETER DEFINITIONS (SI UNITS)
-# ==========================================
-"""
-temp      → Temperature (°C)
-press     → Pressure (kPa)
-naoh      → NaOH concentration (mass fraction, dimensionless)
-humidity  → Relative humidity (%)
-stir      → Stirrer speed (RPM)
-mode      → Process mode (0 = Bulk, 1 = Stepwise)
-ds        → Degree of substitution (dimensionless)
-viscosity → Dynamic viscosity (Pa·s approx scaled)
-moisture  → Moisture content (%)
-"""
-
-# ==========================================
-#  WEATHER API
+# WEATHER API (YOUR KEY USED)
 # ==========================================
 API_KEY = "c86236be4a9f76875aad940c96e5111b"
 
 def get_weather():
     url = f"http://api.openweathermap.org/data/2.5/weather?q=Lucknow&appid={API_KEY}&units=metric"
     data = requests.get(url).json()
-    return data['main']['humidity'], data['main']['temp']
+    return data['main']['humidity']
 
 # ==========================================
-#  DATABASE SETUP
+# CLOUD LOGGING (AWS / GCP AUTO SWITCH)
 # ==========================================
-conn = sqlite3.connect("database.db", check_same_thread=False)
-cursor = conn.cursor()
+USE_AWS = os.getenv("USE_AWS", "false") == "true"
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS logs (
-    time TEXT,
-    temp REAL,
-    pressure REAL,
-    naoh REAL,
-    humidity REAL,
-    stir REAL,
-    mode TEXT,
-    viscosity REAL,
-    moisture REAL
-)
-""")
-conn.commit()
+if USE_AWS:
+    import boto3
+    db = boto3.resource('dynamodb')
+    table = db.Table("biotwin_logs")
 
-def log_data(data):
-    cursor.execute("INSERT INTO logs VALUES (?,?,?,?,?,?,?,?,?)", data)
-    conn.commit()
+    def log(data):
+        table.put_item(Item=data)
+
+else:
+    try:
+        from google.cloud import firestore
+        db = firestore.Client()
+
+        def log(data):
+            db.collection("biotwin_logs").add(data)
+    except:
+        def log(data):
+            print("LOG:", data)
 
 # ==========================================
-#  DATA GENERATOR
+# DATA GENERATION
 # ==========================================
-def generate_data(n=1000, seq_len=10):
+seq_len = 10
+
+def generate_data(n=1000):
     X, y = [], []
     for _ in range(n):
         temp = np.random.uniform(60,80)
@@ -90,22 +79,7 @@ def generate_data(n=1000, seq_len=10):
     return np.array(X), np.array(y)
 
 # ==========================================
-#  SCALING + TRAIN MODEL
-# ==========================================
-seq_len = 10
-X, y = generate_data()
-
-scaler_X = StandardScaler()
-X_scaled = scaler_X.fit_transform(X.reshape(-1,7)).reshape(X.shape)
-
-scaler_y = StandardScaler()
-y_scaled = scaler_y.fit_transform(y)
-
-X_t = torch.FloatTensor(X_scaled)
-y_t = torch.FloatTensor(y_scaled)
-
-# ==========================================
-#  MODEL
+# MODEL
 # ==========================================
 class Attention(nn.Module):
     def __init__(self):
@@ -113,9 +87,10 @@ class Attention(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(64,64), nn.Tanh(), nn.Linear(64,1)
         )
+
     def forward(self,x):
         w = torch.softmax(self.net(x),dim=1)
-        return torch.sum(w*x,dim=1), w
+        return torch.sum(w*x,dim=1)
 
 class Model(nn.Module):
     def __init__(self):
@@ -128,24 +103,39 @@ class Model(nn.Module):
             nn.Linear(32,2),
             nn.Softplus()
         )
+
     def forward(self,x):
         out,_ = self.lstm(x)
-        ctx,_ = self.attn(out)
+        ctx = self.attn(out)
         return self.fc(ctx)
 
+# ==========================================
+# TRAIN MODEL (RUN ON START)
+# ==========================================
+X, y = generate_data()
+
+scaler_X = StandardScaler()
+X_scaled = scaler_X.fit_transform(X.reshape(-1,7)).reshape(X.shape)
+
+scaler_y = StandardScaler()
+y_scaled = scaler_y.fit_transform(y)
+
+X_t = torch.FloatTensor(X_scaled)
+y_t = torch.FloatTensor(y_scaled)
+
 model = Model()
-opt = torch.optim.Adam(model.parameters(),lr=0.005)
+opt = torch.optim.Adam(model.parameters(), lr=0.005)
 loss_fn = nn.MSELoss()
 
 for _ in range(80):
     pred = model(X_t)
-    loss = loss_fn(pred,y_t)
+    loss = loss_fn(pred, y_t)
     opt.zero_grad()
     loss.backward()
     opt.step()
 
 # ==========================================
-#  SIMULATION
+# SIMULATION
 # ==========================================
 def simulate(temp,press,naoh,hum,stir,mode):
     seq, ds = [],0
@@ -154,6 +144,7 @@ def simulate(temp,press,naoh,hum,stir,mode):
             ds += naoh*0.12*(t/seq_len)
         else:
             ds = naoh*1.5 if t>3 else naoh*0.4*t
+
         seq.append([temp,press,naoh,hum,stir,mode,ds])
 
     seq = scaler_X.transform(np.array(seq)).reshape(1,seq_len,-1)
@@ -161,10 +152,9 @@ def simulate(temp,press,naoh,hum,stir,mode):
     return scaler_y.inverse_transform(pred)[0]
 
 # ==========================================
-#  GENETIC OPTIMIZATION
+# GENETIC OPTIMIZATION (SAFE)
 # ==========================================
-def genetic_opt():
-    hum,_ = get_weather()
+def genetic_opt(hum):
     pop = [np.random.uniform([60,180,0.38,200,0],
                              [80,250,0.44,400,1]) for _ in range(20)]
 
@@ -173,51 +163,105 @@ def genetic_opt():
         for ind in pop:
             temp,press,naoh,stir,mode = ind
             mode = int(round(mode))
+
             v,m = simulate(temp,press,naoh,hum,stir,mode)
             scores.append(v - 2*m)
 
         pop = [pop[i] for i in np.argsort(scores)[-10:]]
 
         for _ in range(10):
-            idx = np.random.choice(len(pop), 2, replace=False)   # FIXED
-            p1, p2 = pop[idx[0]], pop[idx[1]]
+            idx = np.random.choice(len(pop),2,replace=False)
+            p1,p2 = pop[idx[0]],pop[idx[1]]
+
             child = (p1+p2)/2 + np.random.normal(0,0.02,5)
+
+            # HARD CONSTRAINTS (IMPORTANT)
+            child = np.clip(child,
+                            [60,180,0.38,200,0],
+                            [80,250,0.44,400,1])
+
             pop.append(child)
 
     best = pop[np.argmax(scores)]
     temp,press,naoh,stir,mode = best
     mode = int(round(mode))
+
     v,m = simulate(temp,press,naoh,hum,stir,mode)
 
     return temp,press,naoh,stir,mode,v,m
 
 # ==========================================
-#  STREAMLIT UI
+# FASTAPI
 # ==========================================
-st.title(" BioTwin SaaS - Smart HPMC Digital Twin")
+app = FastAPI(title="BioTwin Industrial API")
 
-hum,temp_out = get_weather()
-st.info(f" Humidity: {hum}% | Temp: {temp_out}°C")
+class Input(BaseModel):
+    temp: float
+    press: float
+    naoh: float
+    stir: float
+    mode: int
 
-temp = st.slider("Temperature (°C)",60,80,70)
-press = st.slider("Pressure (kPa)",180,250,210)
-naoh = st.slider("NaOH Ratio (mass fraction)",0.38,0.44,0.40)
-stir = st.slider("Stir Speed (RPM)",200,400,300)
-mode = st.selectbox("Mode",["Bulk","Stepwise"])
-mode_val = 1 if mode=="Stepwise" else 0
+# -------------------------
+# PREDICTION
+# -------------------------
+@app.post("/predict")
+def predict(inp: Input, user: str = Header(default="guest")):
+    hum = get_weather()
 
-if st.button("Predict"):
-    v,m = simulate(temp,press,naoh,hum,stir,mode_val)
+    v,m = simulate(inp.temp,inp.press,inp.naoh,hum,inp.stir,inp.mode)
 
-    st.success(f"Viscosity (Pa·s): {v:.2f}")
-    st.success(f"Moisture (%): {m:.2f}")
+    log({
+        "user": user,
+        "time": str(datetime.now()),
+        "temp": inp.temp,
+        "press": inp.press,
+        "naoh": inp.naoh,
+        "stir": inp.stir,
+        "mode": inp.mode,
+        "viscosity": float(v),
+        "moisture": float(m)
+    })
 
-    log_data((datetime.now(),temp,press,naoh,hum,stir,mode,v,m))
+    return {
+        "user": user,
+        "viscosity": float(v),
+        "moisture": float(m),
+        "message": "Prediction successful"
+    }
 
-if st.button("Optimize Process"):
-    best = genetic_opt()
-    st.write(" Optimal Settings:", best)
+# -------------------------
+# OPTIMIZATION
+# -------------------------
+@app.get("/optimize")
+def optimize(user: str = Header(default="guest")):
+    hum = get_weather()
 
-if st.checkbox("Show Logs"):
-    df = pd.read_sql("SELECT * FROM logs", conn)
-    st.dataframe(df)
+    best = genetic_opt(hum)
+
+    temp,press,naoh,stir,mode,v,m = best
+
+    mode_text = "Stepwise" if mode==1 else "Bulk"
+
+    return {
+        "user": user,
+        "recommended_settings": {
+            "temperature_C": round(temp,2),
+            "pressure_kPa": round(press,2),
+            "naoh_ratio": round(naoh,3),
+            "stir_rpm": round(stir,2),
+            "mode": mode_text
+        },
+        "expected_output": {
+            "viscosity_Pa_s": round(float(v),2),
+            "moisture_percent": round(float(m),2)
+        },
+        "action": "Apply above parameters in reactor"
+    }
+
+# -------------------------
+# HEALTH CHECK
+# -------------------------
+@app.get("/")
+def home():
+    return {"status": "BioTwin API running"}
