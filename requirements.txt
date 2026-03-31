@@ -63,3 +63,5 @@ matplotlib
 folium
 streamlit-folium
 torch
+fastapi
+uvicorn
