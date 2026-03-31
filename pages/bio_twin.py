@@ -93,8 +93,8 @@ y_t = torch.FloatTensor(y_scaled)
 #  MODEL
 # ==========================================
 class Attention(nn.Module):
-    def _init_(self):
-        super()._init_()
+    def __init__(self):   # FIXED
+        super().__init__()
         self.net = nn.Sequential(
             nn.Linear(64,64), nn.Tanh(), nn.Linear(64,1)
         )
@@ -103,8 +103,8 @@ class Attention(nn.Module):
         return torch.sum(w*x,dim=1), w
 
 class Model(nn.Module):
-    def _init_(self):
-        super()._init_()
+    def __init__(self):   # FIXED
+        super().__init__()
         self.lstm = nn.LSTM(7,64,batch_first=True)
         self.attn = Attention()
         self.fc = nn.Sequential(
