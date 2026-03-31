@@ -62,3 +62,4 @@ requests
 matplotlib
 folium
 streamlit-folium
+torch
