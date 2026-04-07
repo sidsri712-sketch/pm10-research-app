@@ -468,26 +468,44 @@ if run_hybrid or run_diag or predict_custom:
     # --------------------------------------------------
     st.subheader("📈 Trend & 24-Hour Forecast")
     
-    df_f = df_train[
-        (df_train["timestamp"].dt.date >= start_date) &
-        (df_train["timestamp"].dt.date <= end_date)
-    ].copy()
+    # -------------------------------
+# FILTER
+# -------------------------------
+df_f = df_train[
+    (df_train["timestamp"].dt.date >= start_date) &
+    (df_train["timestamp"].dt.date <= end_date)
+].copy()
 
-    # 🔒 FORCE datetime (critical)
-    df_f["timestamp"] = pd.to_datetime(df_f["timestamp"], errors="coerce")
+# -------------------------------
+# SAFETY CHECK (empty dataset)
+# -------------------------------
+if df_f.empty:
+    st.warning("No data available for selected date range.")
+    st.stop()
+
+# -------------------------------
+# FORCE DATETIME
+# -------------------------------
+df_f["timestamp"] = pd.to_datetime(df_f["timestamp"], errors="coerce")
 
 # Drop invalid timestamps
-    df_f = df_f.dropna(subset=["timestamp"])
+df_f = df_f.dropna(subset=["timestamp"])
 
-# 🔁 Resample (safe)
-    df_r = (
-        df_f
-        .set_index("timestamp")
-        .sort_index()
-        .resample("1h")
-        .mean(numeric_only=True)
-        .dropna()
-    )
+# -------------------------------
+# SORT + DEDUPLICATE (important)
+# -------------------------------
+df_f = df_f.sort_values("timestamp").drop_duplicates(subset="timestamp")
+
+# -------------------------------
+# RESAMPLE (robust)
+# -------------------------------
+df_r = (
+    df_f
+    .set_index("timestamp")
+    .resample("1h")
+    .mean(numeric_only=True)
+    .dropna()
+)
 
         # 3. FIXED RECURSIVE FORECAST LOOP
         # Use city-wide average as the starting 'synaptic lag'
