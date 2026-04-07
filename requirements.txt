@@ -65,3 +65,4 @@ streamlit-folium
 torch
 fastapi
 uvicorn
+urllib3
