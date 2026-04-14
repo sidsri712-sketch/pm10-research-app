@@ -535,15 +535,21 @@ for ft in future_times:
 
     current_lag_value = pred_real
 
-        # 4. CHART PREPARATION
-        df_r["Type"] = "Historical"
-        df_forecast["Type"] = "Forecast"
+# Combine datasets
+df_r_plot = df_r.reset_index()[["timestamp", "pm10"]]
+df_r_plot["Type"] = "Historical"
+
+df_forecast_plot = df_forecast.copy()
+df_forecast_plot["Type"] = "Forecast"
+
+df_combined = pd.concat([df_r_plot, df_forecast_plot])
+
+# Set index
+df_combined = df_combined.sort_values("timestamp").set_index("timestamp")
+
+# Plot
+st.line_chart(df_combined["pm10"])
         
-        # Plotting logic
-        st.line_chart(df_forecast.set_index("timestamp")["pm10"])
-        st.caption("The graph predicts Lucknow's PM10 levels for the next 24 hours using the NSS-Net SRI loop.")
-    else:
-        st.info("Collect more historical data to enable forecasting.")
     # --------------------------------------------------
 # ACCURACY TRACKER (SIDEBAR ADDITION)
 # --------------------------------------------------
