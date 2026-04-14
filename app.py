@@ -507,35 +507,33 @@ df_r = (
     .dropna()
 )
 
-        # 3. FIXED RECURSIVE FORECAST LOOP
-        # Use city-wide average as the starting 'synaptic lag'
-        current_lag_value = df_live["pm10"].mean() 
-        future_results = []
+# 3. FIXED RECURSIVE FORECAST LOOP
+current_lag_value = df_live["pm10"].mean() 
+future_results = []
 
-        for ft in future_times:
-            # Prepare feature vector as a DataFrame for the Scaler
-            input_df = pd.DataFrame([[
-                custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month, 
-                weather_now["temp"], weather_now["hum"], weather_now["wind"], 
-                current_lag_value
-            ]], columns=features_nss)
-            
-            # SCALE BEFORE PREDICTING (Matches training logic)
-            input_scaled = scaler.transform(input_df)
-            
-            # PREDICT USING RF_AXON
-            pred_log = rf_axon.predict(input_scaled)[0]
-            pred_real = np.expm1(pred_log)
-            
-            # PHYSICAL SAFETY FLOOR
-            pred_real = max(pred_real, df_train["pm10"].min())
-            
-            future_results.append({"timestamp": ft, "pm10": pred_real})
-            
-            # UPDATE THE SYNAPSE FOR THE NEXT HOUR
-            current_lag_value = pred_real 
+future_times = pd.date_range(
+    start=pd.Timestamp.now(),
+    periods=24,
+    freq="H"
+)
 
-        df_forecast = pd.DataFrame(future_results)
+for ft in future_times:
+    input_df = pd.DataFrame([[ 
+        custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month, 
+        weather_now["temp"], weather_now["hum"], weather_now["wind"], 
+        current_lag_value
+    ]], columns=features_nss)
+
+    input_scaled = scaler.transform(input_df)
+
+    pred_log = rf_axon.predict(input_scaled)[0]
+    pred_real = np.expm1(pred_log)
+
+    pred_real = max(pred_real, df_train["pm10"].min())
+
+    future_results.append({"timestamp": ft, "pm10": pred_real})
+
+    current_lag_value = pred_real
 
         # 4. CHART PREPARATION
         df_r["Type"] = "Historical"
