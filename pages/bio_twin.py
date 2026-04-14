@@ -1,279 +1,260 @@
-import numpy as np
-import torch
-import torch.nn as nn
-from sklearn.preprocessing import StandardScaler
 import streamlit as st
 import requests
-from datetime import datetime
-import sqlite3
+import pandas as pd
+import numpy as np
+import time
+import matplotlib.pyplot as plt
 
-# ==========================================
-# WEATHER API
-# ==========================================
+# ================= CONFIG =================
 API_KEY = "c86236be4a9f76875aad940c96e5111b"
+CITY = "Lucknow"
 
-def get_weather():
-    url = f"http://api.openweathermap.org/data/2.5/weather?q=Lucknow&appid={API_KEY}&units=metric"
-    data = requests.get(url).json()
-    return data['main']['humidity'], data['main']['temp']
-
-# ==========================================
-# DATABASE
-# ==========================================
-conn = sqlite3.connect("biotwin.db", check_same_thread=False)
-cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS logs (
-    user TEXT,
-    time TEXT,
-    temp REAL,
-    pressure REAL,
-    naoh REAL,
-    humidity REAL,
-    stir REAL,
-    mode TEXT,
-    viscosity REAL,
-    moisture REAL
-)
-""")
-conn.commit()
-
-def log_data(data):
-    cursor.execute("INSERT INTO logs VALUES (?,?,?,?,?,?,?,?,?,?)", data)
-    conn.commit()
-
-# ==========================================
-# PHYSICS (NEW ADDITION)
-# ==========================================
-R = 8.314  # J/mol·K
-A = 1.2e3  # pre-exponential factor
-E = 42000  # activation energy (J/mol)
-
-def reaction_rate(temp, naoh, ds):
-    T = temp + 273.15
-    k = A * np.exp(-E/(R*T))
-    return k * naoh * (1 - ds)
-
-def energy_balance(temp, stir, humidity):
-    return temp + 0.02*stir - 0.01*humidity
-
-# ==========================================
-# DATA GENERATION (MODIFIED WITH PHYSICS)
-# ==========================================
-seq_len = 10
-
-def generate_data(n=1000):
-    X, y = [], []
-    for _ in range(n):
-        temp = np.random.uniform(60,80)
-        press = np.random.uniform(180,250)
-        naoh = np.random.uniform(0.38,0.44)
-        hum = np.random.uniform(40,70)
-        stir = np.random.uniform(200,400)
-        mode = np.random.choice([0,1])
-
-        seq, ds = [], 0.05
-        for t in range(seq_len):
-
-            temp_eff = energy_balance(temp, stir, hum)
-
-            rate = reaction_rate(temp_eff, naoh, ds)
-
-            if mode==1:
-                ds += rate * (t/seq_len)
-            else:
-                ds += rate
-
-            ds = min(ds, 1.0)
-
-            seq.append([temp_eff,press,naoh,hum,stir,mode,ds])
-
-        viscosity = 0.06*temp + 15*ds + 10*naoh
-        moisture = 0.1*hum - 0.02*temp + 3.5 - 2*ds
-
-        X.append(seq)
-        y.append([viscosity, moisture])
-
-    return np.array(X), np.array(y)
-
-# ==========================================
-# MODEL
-# ==========================================
-class Attention(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(64,64), nn.Tanh(), nn.Linear(64,1)
-        )
-    def forward(self,x):
-        w = torch.softmax(self.net(x),dim=1)
-        return torch.sum(w*x,dim=1)
-
-class Model(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.lstm = nn.LSTM(7,64,batch_first=True)
-        self.attn = Attention()
-        self.fc = nn.Sequential(
-            nn.Linear(64,32),
-            nn.ReLU(),
-            nn.Linear(32,2),
-            nn.Softplus()
-        )
-    def forward(self,x):
-        out,_ = self.lstm(x)
-        ctx = self.attn(out)
-        return self.fc(ctx)
-
-# ==========================================
-# TRAIN MODEL
-# ==========================================
-@st.cache_resource
-def train_model():
-    X, y = generate_data()
-
-    scaler_X = StandardScaler()
-    X_scaled = scaler_X.fit_transform(X.reshape(-1,7)).reshape(X.shape)
-
-    scaler_y = StandardScaler()
-    y_scaled = scaler_y.fit_transform(y)
-
-    X_t = torch.FloatTensor(X_scaled)
-    y_t = torch.FloatTensor(y_scaled)
-
-    model = Model()
-    opt = torch.optim.Adam(model.parameters(), lr=0.005)
-    loss_fn = nn.MSELoss()
-
-    for _ in range(80):
-        pred = model(X_t)
-        loss = loss_fn(pred,y_t)
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-
-    return model, scaler_X, scaler_y
-
-model, scaler_X, scaler_y = train_model()
-
-# ==========================================
-# SIMULATION (PHYSICS APPLIED)
-# ==========================================
-def simulate(temp,press,naoh,hum,stir,mode):
-    seq, ds = [],0.05
-    for t in range(seq_len):
-
-        temp_eff = energy_balance(temp, stir, hum)
-        rate = reaction_rate(temp_eff, naoh, ds)
-
-        if mode==1:
-            ds += rate * (t/seq_len)
-        else:
-            ds += rate
-
-        ds = min(ds,1.0)
-
-        seq.append([temp_eff,press,naoh,hum,stir,mode,ds])
-
-    seq = scaler_X.transform(np.array(seq)).reshape(1,seq_len,-1)
-    pred = model(torch.FloatTensor(seq)).detach().numpy()
-    return scaler_y.inverse_transform(pred)[0]
-
-# ==========================================
-# GENETIC OPT (UNCHANGED)
-# ==========================================
-def genetic_opt(hum):
-    pop = [np.random.uniform([60,180,0.38,200,0],
-                             [80,250,0.44,400,1]) for _ in range(20)]
-
-    for _ in range(10):
-        scores = []
-        for ind in pop:
-            temp,press,naoh,stir,mode = ind
-            mode = int(round(mode))
-            v,m = simulate(temp,press,naoh,hum,stir,mode)
-            scores.append(v - 2*m)
-
-        pop = [pop[i] for i in np.argsort(scores)[-10:]]
-
-        for _ in range(10):
-            idx = np.random.choice(len(pop),2,replace=False)
-            p1,p2 = pop[idx[0]],pop[idx[1]]
-
-            child = (p1+p2)/2 + np.random.normal(0,0.02,5)
-
-            child = np.clip(child,
-                            [60,180,0.38,200,0],
-                            [80,250,0.44,400,1])
-
-            pop.append(child)
-
-    best = pop[np.argmax(scores)]
-    temp,press,naoh,stir,mode = best
-    mode = int(round(mode))
-    v,m = simulate(temp,press,naoh,hum,stir,mode)
-
-    return temp,press,naoh,stir,mode,v,m
-
-# ==========================================
-# STREAMLIT UI (UNCHANGED)
-# ==========================================
 st.set_page_config(layout="wide")
-st.title("🧪 BioTwin Industrial Digital Twin")
+st.title(" AI-Powered Hybrid Microgrid Dashboard")
 
-if "user" not in st.session_state:
-    user = st.text_input("Enter Username")
-    if st.button("Login"):
-        st.session_state.user = user
+# ================= WEATHER =================
+def get_weather():
+    url = f"http://api.openweathermap.org/data/2.5/forecast?q={CITY}&appid={API_KEY}&units=metric"
+    return requests.get(url).json()
 
-if "user" in st.session_state:
+data = get_weather()
 
-    st.success(f"Logged in as {st.session_state.user}")
+if "list" not in data:
+    st.error("Weather API failed.")
+    st.stop()
 
-    hum,temp_out = get_weather()
+# ================= DATA =================
+times, wind, cloud = [], [], []
 
-    col1, col2 = st.columns(2)
-    col1.metric("Ambient Temp (°C)", temp_out)
-    col2.metric("Humidity (%)", hum)
+for i in range(8):
+    entry = data["list"][i]
+    times.append(entry["dt_txt"])
+    wind.append(entry["wind"]["speed"])
+    cloud.append(entry["clouds"]["all"])
 
-    st.divider()
+df = pd.DataFrame({
+    "Time": times,
+    "Wind": wind,
+    "Cloud": cloud
+})
 
-    temp = st.slider("Temperature (°C)",60,80,70)
-    press = st.slider("Pressure (kPa)",180,250,210)
-    naoh = st.slider("NaOH Ratio",0.38,0.44,0.40)
-    stir = st.slider("Stir Speed (RPM)",200,400,300)
-    mode = st.selectbox("Mode",["Bulk","Stepwise"])
-    mode_val = 1 if mode=="Stepwise" else 0
+# ================= USER INPUT =================
+st.sidebar.header(" System Design")
 
-    if st.button("Run Prediction"):
-        v,m = simulate(temp,press,naoh,hum,stir,mode_val)
+num_houses = st.sidebar.slider("Number of Houses", 1, 20, 4)
+solar_kw = st.sidebar.slider("Solar per House (kW)", 1, 5, 2)
+wind_kw = st.sidebar.slider("Wind per House (kW)", 0, 3, 1)
+biomass_power = st.sidebar.slider("Biomass per House (kW)", 0.5, 2.0, 1.0)
 
-        st.success(f"Viscosity: {v:.2f} Pa·s")
-        st.success(f"Moisture: {m:.2f} %")
+battery_capacity = st.sidebar.slider("Battery Capacity (kWh)", 10, 50, 20)
+battery_level = st.sidebar.slider("Initial Battery (%)", 10, 100, 50)
 
-        log_data((st.session_state.user,str(datetime.now()),
-                  temp,press,naoh,hum,stir,mode,v,m))
+# ================= MODELS =================
+def solar_model(cloud, capacity):
+    irradiance = 1000 * (1 - cloud / 100)
+    return max(0, (irradiance * 0.18 * capacity) / 1000)
 
-    if st.button("Optimize Process"):
-        best = genetic_opt(hum)
+def wind_model(speed, capacity):
+    if speed < 3:
+        return 0
+    elif speed < 12:
+        return capacity * (speed / 12) ** 3
+    else:
+        return capacity
 
-        temp,press,naoh,stir,mode,v,m = best
-        mode_text = "Stepwise" if mode==1 else "Bulk"
+def synaptic_memory(series, alpha=0.6):
+    smoothed = []
+    prev = series[0]
+    for val in series:
+        new_val = alpha * prev + (1 - alpha) * val
+        smoothed.append(new_val)
+        prev = new_val
+    return smoothed
 
-        st.subheader("Optimal Settings")
+def rf_ok_adjustment(solar, wind):
+    return solar * 0.9 + wind * 1.1
 
-        st.write(f"Temperature: {temp:.2f} °C")
-        st.write(f"Pressure: {press:.2f} kPa")
-        st.write(f"NaOH: {naoh:.3f}")
-        st.write(f"Stir: {stir:.2f} RPM")
-        st.write(f"Mode: {mode_text}")
+# ================= GENERATION =================
+solar = synaptic_memory([solar_model(c, solar_kw) for c in df["Cloud"]])
+wind_gen = synaptic_memory([wind_model(w, wind_kw) for w in df["Wind"]])
 
-        st.subheader("Expected Output")
-        st.write(f"Viscosity: {v:.2f} Pa·s")
-        st.write(f"Moisture: {m:.2f} %")
+# ================= MULTI HOUSE =================
+houses = []
 
-    if st.checkbox("Show Logs"):
-        import pandas as pd
-        df = pd.read_sql("SELECT * FROM logs", conn)
-        st.dataframe(df)
+for h in range(num_houses):
+    house = {"solar": [], "wind": [], "biomass": [], "total": []}
+
+    for i in range(len(df)):
+        s = solar[i] * np.random.uniform(0.9, 1.1)
+        w = wind_gen[i] * np.random.uniform(0.8, 1.2)
+        b = biomass_power
+
+        total = s + w + b
+
+        house["solar"].append(s)
+        house["wind"].append(w)
+        house["biomass"].append(b)
+        house["total"].append(total)
+
+    houses.append(house)
+
+# ================= AGGREGATION =================
+df["Solar"] = np.sum([h["solar"] for h in houses], axis=0)
+df["Wind"] = np.sum([h["wind"] for h in houses], axis=0)
+df["Biomass"] = np.sum([h["biomass"] for h in houses], axis=0)
+df["Total_Generation"] = df["Solar"] + df["Wind"] + df["Biomass"]
+
+# ================= LOAD =================
+load_base = 1.5 * num_houses
+load_pattern = [0.6, 0.8, 1.2, 1.5, 1.3, 0.9, 0.7, 0.5]
+
+# ================= BATTERY =================
+battery = battery_level / 100 * battery_capacity
+battery_series = []
+decision_series = []
+
+battery_min = 0.3 * battery_capacity
+
+# ================= PREDICTION =================
+forecast = data["list"]
+next_cloud = np.mean([x["clouds"]["all"] for x in forecast])
+next_wind = np.mean([x["wind"]["speed"] for x in forecast])
+
+predicted_solar = solar_model(next_cloud, solar_kw)
+predicted_wind = wind_model(next_wind, wind_kw)
+
+# ================= SIMULATION =================
+for i in range(len(df)):
+    load = load_base * load_pattern[i]
+    generation = df["Total_Generation"][i]
+
+    decision = "Normal"
+
+    if generation >= load:
+        surplus = generation - load
+        charge = min(surplus, battery_capacity - battery)
+        battery += charge
+        decision = "Charging Battery"
+
+    else:
+        deficit = load - generation
+
+        if battery > battery_min:
+            supply = min(deficit, battery - battery_min)
+            battery -= supply
+            deficit -= supply
+            decision = "Battery Supply"
+
+        if deficit > 0:
+            decision = "Biomass Backup"
+
+    battery_series.append(battery)
+    decision_series.append(decision)
+
+# ================= DASHBOARD =================
+st.markdown("##  Live Dashboard")
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric(" Houses", num_houses)
+c2.metric(" Total Energy (kWh)", round(df["Total_Generation"].sum(), 2))
+c3.metric(" Battery (kWh)", round(battery, 2))
+c4.metric(" Renewable %",
+          round((df["Solar"].sum() + df["Wind"].sum()) /
+                df["Total_Generation"].sum() * 100, 2))
+
+# ================= STATUS =================
+st.markdown("##  System Status")
+
+s1, s2, s3 = st.columns(3)
+
+if battery > 0.7 * battery_capacity:
+    s1.success(" Battery Healthy")
+elif battery > 0.3 * battery_capacity:
+    s1.warning(" Battery Moderate")
+else:
+    s1.error(" Battery Low")
+
+total_predicted = (predicted_solar + predicted_wind) * num_houses
+
+if total_predicted < load_base:
+    s2.error(" Outage Risk Tomorrow")
+else:
+    s2.success(" Stable Supply")
+
+s3.info(decision_series[-1])
+
+# ================= FORECAST =================
+st.markdown("##  Forecast")
+
+f1, f2, f3 = st.columns(3)
+f1.metric(" Solar", round(predicted_solar * num_houses, 2))
+f2.metric(" Wind", round(predicted_wind * num_houses, 2))
+f3.metric(" Load", round(load_base, 2))
+
+# ================= GRAPH (CLEAR) =================
+st.markdown("##  Energy Generation (kW vs Time)")
+
+fig, ax = plt.subplots()
+
+ax.plot(df["Time"], df["Solar"], label="Solar")
+ax.plot(df["Time"], df["Wind"], label="Wind")
+ax.plot(df["Time"], df["Biomass"], label="Biomass")
+
+ax.set_xlabel("Time")
+ax.set_ylabel("Power (kW)")
+ax.set_title("Energy Generation by Source")
+
+ax.legend()
+plt.xticks(rotation=45)
+
+st.pyplot(fig)
+
+# ================= BATTERY GRAPH =================
+st.markdown("##  Battery Level (kWh vs Time)")
+
+fig2, ax2 = plt.subplots()
+
+ax2.plot(df["Time"], battery_series)
+
+ax2.set_xlabel("Time")
+ax2.set_ylabel("Battery Level (kWh)")
+ax2.set_title("Battery Storage Dynamics")
+
+plt.xticks(rotation=45)
+
+st.pyplot(fig2)
+
+# ================= HOUSE =================
+st.markdown("##  Per House Contribution")
+
+for i, house in enumerate(houses):
+    total = sum(house["total"])
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric(f"House {i+1} Solar %",
+              round(sum(house["solar"]) / total * 100, 2))
+    c2.metric("Wind %",
+              round(sum(house["wind"]) / total * 100, 2))
+    c3.metric("Biomass %",
+              round(sum(house["biomass"]) / total * 100, 2))
+
+# ================= AI DECISION =================
+st.markdown("##  AI Decision Engine")
+
+if total_predicted >= load_base:
+    st.success(" Renewable Energy Sufficient")
+elif battery > 0.5 * battery_capacity:
+    st.info(" Use Battery Backup")
+elif biomass_power > 0:
+    st.warning(" Activate Biomass Backup")
+else:
+    st.error(" Power Shortage Risk")
+
+# ================= LIVE =================
+st.markdown("##  Live Simulation")
+
+progress = st.progress(0)
+
+for i in range(len(df)):
+    progress.progress((i+1)/len(df))
+    time.sleep(0.2)
