@@ -4,6 +4,9 @@ import pandas as pd
 import numpy as np
 import time
 import matplotlib.pyplot as plt
+import folium
+import osmnx as ox
+from streamlit_folium import st_folium
 
 # ================= CONFIG =================
 API_KEY = "c86236be4a9f76875aad940c96e5111b"
@@ -252,9 +255,6 @@ else:
 
 # ================= REAL GIS BUILDING MAP (OSM ALIGNED) =================
 
-import folium
-import osmnx as ox
-from streamlit_folium import st_folium
 
 st.markdown("## Campus Microgrid (Real Buildings - GIS Accurate)")
 
