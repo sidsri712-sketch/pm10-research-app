@@ -66,3 +66,4 @@ torch
 fastapi
 uvicorn
 urllib3
+osmnx
