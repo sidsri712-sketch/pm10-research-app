@@ -258,3 +258,150 @@ progress = st.progress(0)
 for i in range(len(df)):
     progress.progress((i+1)/len(df))
     time.sleep(0.2)
+# ================= GIS MICROGRID MAP =================
+
+import folium
+from streamlit_folium import st_folium
+
+st.markdown("## Campus Microgrid GIS Overlay (Satellite + Building Footprints)")
+
+# ---- REAL CAMPUS CENTER ----
+campus_center = [26.8520033, 81.0504370]
+
+# ---- BUILDING LOCATIONS ----
+locations = {
+    "AB1": [26.852400, 81.050800],
+    "AB2": [26.852600, 81.051100],
+    "AB3": [26.852800, 81.051400],
+    "AB4": [26.853000, 81.051700],
+    "AB5": [26.853200, 81.052000],
+    "AB6": [26.853400, 81.052300],
+    "Library": [26.852700, 81.051000],
+    "STP": [26.851400, 81.049500]
+}
+
+# ---- CREATE MAP ----
+m = folium.Map(
+    location=campus_center,
+    zoom_start=17,
+    tiles=None
+)
+
+# ---- SATELLITE TILE ----
+folium.TileLayer(
+    tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attr="Esri",
+    name="Satellite",
+    overlay=False,
+    control=True
+).add_to(m)
+
+# ---- CAMPUS BOUNDARY ----
+campus_boundary = {
+    "type": "Feature",
+    "properties": {"name": "Amity Campus"},
+    "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+            [81.0490, 26.8510],
+            [81.0530, 26.8510],
+            [81.0535, 26.8540],
+            [81.0495, 26.8542],
+            [81.0490, 26.8510]
+        ]]
+    }
+}
+
+folium.GeoJson(
+    campus_boundary,
+    name="Campus Boundary",
+    style_function=lambda x: {
+        "fillColor": "none",
+        "color": "yellow",
+        "weight": 2
+    }
+).add_to(m)
+
+# ---- BUILDING POLYGON FUNCTION ----
+def create_building_polygon(lat, lon, size=0.00015):
+    return [
+        [lon - size, lat - size],
+        [lon + size, lat - size],
+        [lon + size, lat + size],
+        [lon - size, lat + size],
+        [lon - size, lat - size]
+    ]
+
+# ---- ADD BUILDINGS ----
+for name, coords in locations.items():
+    lat = coords[0]
+    lon = coords[1]
+
+    polygon = {
+        "type": "Feature",
+        "properties": {"name": name},
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [create_building_polygon(lat, lon)]
+        }
+    }
+
+    folium.GeoJson(
+        polygon,
+        tooltip=name,
+        style_function=lambda x: {
+            "fillColor": "green" if x["properties"]["name"] == "STP" else "blue",
+            "color": "black",
+            "weight": 1,
+            "fillOpacity": 0.6
+        }
+    ).add_to(m)
+
+# ---- ADD MARKERS ----
+for name, coord in locations.items():
+    folium.Marker(
+        location=coord,
+        popup=name,
+        icon=folium.Icon(color="green" if name == "STP" else "blue")
+    ).add_to(m)
+
+# ---- ENERGY FLOW CALCULATION ----
+flows = []
+
+for i in range(len(houses)):
+    house = houses[i]
+    generation = sum(house["total"])
+    load = load_base
+
+    if i < 6:
+        node = f"AB{i+1}"
+    else:
+        node = "Library"
+
+    if generation > load:
+        flows.append((node, "STP", generation - load, "surplus"))
+    else:
+        flows.append(("STP", node, load - generation, "deficit"))
+
+# ---- DRAW FLOWS ----
+for flow in flows:
+    src = flow[0]
+    dst = flow[1]
+    value = flow[2]
+    ftype = flow[3]
+
+    if src in locations and dst in locations:
+        color = "lime" if ftype == "surplus" else "red"
+
+        folium.PolyLine(
+            locations=[locations[src], locations[dst]],
+            color=color,
+            weight=min(8, 2 + value),
+            tooltip=f"{src} → {dst}: {round(value,2)} kW"
+        ).add_to(m)
+
+# ---- LAYER CONTROL ----
+folium.LayerControl().add_to(m)
+
+# ---- DISPLAY ----
+st_folium(m, width=1000, height=650)
