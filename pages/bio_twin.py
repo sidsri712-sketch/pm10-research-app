@@ -5,7 +5,6 @@ import numpy as np
 import time
 import matplotlib.pyplot as plt
 import folium
-import osmnx as ox
 from streamlit_folium import st_folium
 
 # ================= CONFIG =================
