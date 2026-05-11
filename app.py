@@ -17,9 +17,6 @@ import datetime
 import time
 import io
 import os
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 # --------------------------------------------------
 # PERMANENT DATA STORAGE (GOOGLE SHEETS)
 # --------------------------------------------------
@@ -66,26 +63,9 @@ def fetch_weather():
             "forecast_days=2&timezone=Asia%2FKolkata"
         )
 
-        # 🔁 Retry strategy (critical)
-        session = requests.Session()
-        retry = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        session.mount("https://", adapter)
+        r = requests.get(url).json()
 
-        response = session.get(url, timeout=10)
-
-        # 🔒 Force SSL verification fallback if needed
-        if response.status_code != 200:
-            response = session.get(url, timeout=10, verify=False)
-
-        data = response.json()
-
-        hourly = data["hourly"]
-
+        hourly = r["hourly"]
         df_weather = pd.DataFrame({
             "timestamp": pd.to_datetime(hourly["time"]),
             "temp": hourly["temperature_2m"],
@@ -96,15 +76,8 @@ def fetch_weather():
         return df_weather
 
     except Exception as e:
-        st.warning(f"Weather fallback activated: {e}")
-
-        # 🧠 Intelligent fallback (NOT static)
-        return pd.DataFrame({
-            "timestamp": [pd.Timestamp.now()],
-            "temp": [28],   # realistic Lucknow average
-            "hum": [60],
-            "wind": [2.5]
-        })
+        st.error(f"Weather fetch failed: {e}")
+        return pd.DataFrame()
 
 # --------------------------------------------------
 # DATA PIPELINE
@@ -217,7 +190,7 @@ weather_df = fetch_weather()
 if not weather_df.empty:
     weather_now = weather_df.iloc[0]
     c1, c2, c3 = st.columns(3)
-    c1.metric("🌡 Temperature", f"{weather_now['temp']:.1f} °C")
+    c1.metric("🌡️ Temperature", f"{weather_now['temp']:.1f} °C")
     c2.metric("💧 Humidity", f"{weather_now['hum']:.0f} %")
     c3.metric("💨 Wind Speed", f"{weather_now['wind']:.1f} km/h")
 else:
@@ -468,88 +441,61 @@ if run_hybrid or run_diag or predict_custom:
     # --------------------------------------------------
     st.subheader("📈 Trend & 24-Hour Forecast")
     
-    # -------------------------------
-# FILTER
-# -------------------------------
-df_f = df_train[
-    (df_train["timestamp"].dt.date >= start_date) &
-    (df_train["timestamp"].dt.date <= end_date)
-].copy()
+    df_f = df_train[
+        (df_train["timestamp"].dt.date >= start_date) &
+        (df_train["timestamp"].dt.date <= end_date)
+    ]
 
-# -------------------------------
-# SAFETY CHECK (empty dataset)
-# -------------------------------
-if df_f.empty:
-    st.warning("No data available for selected date range.")
-    st.stop()
-
-# -------------------------------
-# FORCE DATETIME
-# -------------------------------
-df_f["timestamp"] = pd.to_datetime(df_f["timestamp"], errors="coerce")
-
-# Drop invalid timestamps
-df_f = df_f.dropna(subset=["timestamp"])
-
-# -------------------------------
-# SORT + DEDUPLICATE (important)
-# -------------------------------
-df_f = df_f.sort_values("timestamp").drop_duplicates(subset="timestamp")
-
-# -------------------------------
-# RESAMPLE (robust)
-# -------------------------------
-df_r = (
-    df_f
-    .set_index("timestamp")
-    .resample("1h")
-    .mean(numeric_only=True)
-    .dropna()
-)
-
-# 3. FIXED RECURSIVE FORECAST LOOP
-current_lag_value = df_live["pm10"].mean() 
-future_results = []
-
-future_times = pd.date_range(
-    start=pd.Timestamp.now(),
-    periods=24,
-    freq="H"
-)
-
-for ft in future_times:
-    input_df = pd.DataFrame([[ 
-        custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month, 
-        weather_now["temp"], weather_now["hum"], weather_now["wind"], 
-        current_lag_value
-    ]], columns=features_nss)
-
-    input_scaled = scaler.transform(input_df)
-
-    pred_log = rf_axon.predict(input_scaled)[0]
-    pred_real = np.expm1(pred_log)
-
-    pred_real = max(pred_real, df_train["pm10"].min())
-
-    future_results.append({"timestamp": ft, "pm10": pred_real})
-
-    current_lag_value = pred_real
-
-# Combine datasets
-df_r_plot = df_r.reset_index()[["timestamp", "pm10"]]
-df_r_plot["Type"] = "Historical"
-
-df_forecast_plot = df_forecast.copy()
-df_forecast_plot["Type"] = "Forecast"
-
-df_combined = pd.concat([df_r_plot, df_forecast_plot])
-
-# Set index
-df_combined = df_combined.sort_values("timestamp").set_index("timestamp")
-
-# Plot
-st.line_chart(df_combined["pm10"])
+    if len(df_f) > 5:
+        # 1. Historical Trend (Resampled)
+        df_r = df_f.set_index("timestamp").resample("H").mean(numeric_only=True).dropna()
         
+        # 2. Setup Future Time Range
+        future_times = pd.date_range(
+            start=pd.Timestamp.now().ceil("H"),
+            periods=24,
+            freq="H"
+        )
+
+        # 3. FIXED RECURSIVE FORECAST LOOP
+        # Use city-wide average as the starting 'synaptic lag'
+        current_lag_value = df_live["pm10"].mean() 
+        future_results = []
+
+        for ft in future_times:
+            # Prepare feature vector as a DataFrame for the Scaler
+            input_df = pd.DataFrame([[
+                custom_lat, custom_lon, ft.hour, ft.dayofweek, ft.month, 
+                weather_now["temp"], weather_now["hum"], weather_now["wind"], 
+                current_lag_value
+            ]], columns=features_nss)
+            
+            # SCALE BEFORE PREDICTING (Matches training logic)
+            input_scaled = scaler.transform(input_df)
+            
+            # PREDICT USING RF_AXON
+            pred_log = rf_axon.predict(input_scaled)[0]
+            pred_real = np.expm1(pred_log)
+            
+            # PHYSICAL SAFETY FLOOR
+            pred_real = max(pred_real, df_train["pm10"].min())
+            
+            future_results.append({"timestamp": ft, "pm10": pred_real})
+            
+            # UPDATE THE SYNAPSE FOR THE NEXT HOUR
+            current_lag_value = pred_real 
+
+        df_forecast = pd.DataFrame(future_results)
+
+        # 4. CHART PREPARATION
+        df_r["Type"] = "Historical"
+        df_forecast["Type"] = "Forecast"
+        
+        # Plotting logic
+        st.line_chart(df_forecast.set_index("timestamp")["pm10"])
+        st.caption("The graph predicts Lucknow's PM10 levels for the next 24 hours using the NSS-Net SRI loop.")
+    else:
+        st.info("Collect more historical data to enable forecasting.")
     # --------------------------------------------------
 # ACCURACY TRACKER (SIDEBAR ADDITION)
 # --------------------------------------------------
