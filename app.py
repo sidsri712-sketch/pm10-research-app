@@ -1129,25 +1129,18 @@ with tab1:
             active_param=active_param, opacity=map_opacity,
         )
         # Street-level AQI layer (toggle in controls)
-        street_roads = []
+        # Street-level AQI — always fast (no traffic API by default)
+        street_pts = []
         if show_streets:
-            _street_status = st.empty()
-            _street_status.info("🛣️ Loading road network & traffic data...")
             try:
-                fmap, street_roads = build_street_aq_layer(
+                fmap, street_pts = build_street_aq_layer(
                     fmap, lat, lon, grids, lats, lons,
                     active_param=active_param,
                     radius_m=street_r,
-                    fetch_traffic=True,
+                    fetch_traffic=False,   # fast render first
                 )
-                if street_roads:
-                    _street_status.success(
-                        f"🛣️ {len(street_roads)} road segments loaded · "
-                        f"Coloured by {active_param.upper()} · Click road for details")
-                else:
-                    _street_status.warning("⚠️ No roads returned from OSM. Try a larger radius.")
             except Exception as _se:
-                _street_status.warning(f"⚠️ Street AQ error: {_se}")
+                st.warning(f"⚠️ Street AQ: {_se}")
         st_folium(fmap, use_container_width=True, height=600, returned_objects=[])
 
     with col_info:
