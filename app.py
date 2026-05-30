@@ -15,7 +15,6 @@ from scipy.interpolate import griddata
 from streamlit_autorefresh import st_autorefresh
 import datetime, time, json, math, warnings
 from intelligence import run_forecast_pipeline, attribute_sources, detect_events, generate_narrative, EVENT_TYPES
-from street_aq import build_street_aq_layer
 warnings.filterwarnings("ignore")
 
 # ══════════════════════════════════════════════════════
@@ -1111,14 +1110,10 @@ with tab1:
     st.caption("Switch basemap (top-right) · Hover anywhere for AQ values · Click station dots for full data")
 
     # ── Map controls row ──
-    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
-    show_hm      = mc1.checkbox("🌡️ Heatmap",     value=True)
-    show_wind    = mc2.checkbox("💨 Wind Arrows",  value=True)
-    show_streets = mc3.checkbox("🛣️ Street AQI",  value=False,
-                                 help="Colours each road by AQ level using OSM + TomTom traffic")
-    street_r     = mc4.selectbox("Street radius",  [1000, 2000, 3000, 5000],
-                                   index=1, format_func=lambda x: f"{x//1000} km")
-    map_pitch    = mc5.slider("🎥 Map pitch", 0, 80, 45)
+    mc1, mc2, mc3 = st.columns(3)
+    show_hm   = mc1.checkbox("🌡️ Heatmap",    value=True)
+    show_wind = mc2.checkbox("💨 Wind Arrows", value=True)
+    map_pitch = mc3.slider("🎥 Map pitch", 0, 80, 45)
 
     col_map, col_info = st.columns([3, 1])
 
@@ -1129,19 +1124,7 @@ with tab1:
             all_stations, firms_df, weather,
             active_param=active_param, opacity=map_opacity,
         )
-        # Street-level AQI — fast path, no external API calls
-        if show_streets:
-            try:
-                fmap, _street_pts = build_street_aq_layer(
-                    fmap, lat, lon, grids, lats, lons,
-                    active_param=active_param,
-                    radius_m=street_r,
-                    fetch_traffic=False,
-                )
-                st.caption(f"🛣️ Street AQI active — {len(_street_pts)} grid points · "
-                            f"Showing {active_param.upper()} dispersion at street resolution")
-            except Exception as _se:
-                st.warning(f"⚠️ Street AQ: {_se}")
+
         # Render — explicit pixel width avoids streamlit-folium sizing bugs
         st_folium(fmap, width=700, height=580, returned_objects=[])
 
