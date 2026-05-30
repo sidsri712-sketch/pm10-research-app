@@ -257,7 +257,7 @@ class LSTMLite:
         self.Wh = rng.randn(4*hidden_size, hidden_size) * scale
         self.Wx = rng.randn(4*hidden_size, input_size)  * scale
         self.b  = np.zeros(4*hidden_size)
-        self.Wy = rng.randn(1, hidden_size) * scale
+        self.Wy = rng.randn(hidden_size) * scale  # shape (H,)
         self.by = np.zeros(1)
         self.trained = False
 
@@ -320,8 +320,8 @@ class LSTMLite:
         A = F.T @ F + 1e-4 * np.eye(self.H)
         b = F.T @ T
         w = np.linalg.solve(A, b)
-        self.Wy = w.reshape(1, -1)
-        self.by = np.array([np.mean(T) - (self.Wy @ np.mean(F, axis=0))])
+        self.Wy = w.ravel()  # shape (H,)
+        self.by = np.array([np.mean(T) - float(np.dot(self.Wy, np.mean(F, axis=0)))])
 
         self.trained  = True
         self.last_seq = X_all[-self.SL:]
@@ -337,7 +337,8 @@ class LSTMLite:
         lag   = self.last_lag
         for _ in range(steps):
             h    = self._forward(seq)
-            pred = float(np.expm1((self.Wy @ h + self.by)[0]))
+            raw = np.dot(self.Wy.ravel(), h) + float(self.by.ravel()[0])
+            pred = float(np.expm1(np.clip(raw, -10, 20)))
             pred = max(pred, 1.0)
             preds.append(pred)
             # Slide window: build next input row with updated lag
