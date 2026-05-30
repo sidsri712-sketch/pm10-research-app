@@ -1129,25 +1129,26 @@ with tab1:
             active_param=active_param, opacity=map_opacity,
         )
         # Street-level AQI layer (toggle in controls)
+        street_roads = []
         if show_streets:
+            _street_status = st.empty()
+            _street_status.info("🛣️ Loading road network & traffic data...")
             try:
-                result = build_street_aq_layer(
+                fmap, street_roads = build_street_aq_layer(
                     fmap, lat, lon, grids, lats, lons,
                     active_param=active_param,
                     radius_m=street_r,
                     fetch_traffic=True,
                 )
-                # always returns (fmap, roads) — safe unpack
-                if isinstance(result, tuple) and len(result) == 2:
-                    fmap, street_roads = result
-                else:
-                    fmap, street_roads = result, []
                 if street_roads:
-                    st.caption(f"🛣️ {len(street_roads)} road segments coloured by "
-                                f"{active_param.upper()} · Click road for speed + AQI details")
+                    _street_status.success(
+                        f"🛣️ {len(street_roads)} road segments loaded · "
+                        f"Coloured by {active_param.upper()} · Click road for details")
+                else:
+                    _street_status.warning("⚠️ No roads returned from OSM. Try a larger radius.")
             except Exception as _se:
-                st.warning(f"Street AQ: {_se}")
-        st_folium(fmap, width=None, height=600, returned_objects=[])
+                _street_status.warning(f"⚠️ Street AQ error: {_se}")
+        st_folium(fmap, use_container_width=True, height=600, returned_objects=[])
 
     with col_info:
         st.markdown("**📡 Data Sources**")
