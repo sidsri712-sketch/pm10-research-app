@@ -46,37 +46,47 @@ def aqi_label(val):
 def fetch_osm_roads(lat, lon, radius_m=3000):
     """
     Query Overpass API for major roads within radius.
+    Tries multiple mirrors with fallback.
     Returns list of road segments: {name, highway, coords[(lat,lon),...]}
     """
     r_deg = radius_m / 111320
     bbox  = f"{lat-r_deg},{lon-r_deg},{lat+r_deg},{lon+r_deg}"
-    query = f"""
-    [out:json][timeout:25];
-    (
-      way["highway"~"motorway|trunk|primary|secondary|tertiary|residential"]
-         ({bbox});
-    );
-    out geom;
-    """
+    query = (
+        "[out:json][timeout:30];"
+        "(way[\"highway\"~\"motorway|trunk|primary|secondary|tertiary|residential\"]"
+        f"({bbox}););"
+        "out geom;"
+    )
+    mirrors = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    ]
     roads = []
-    try:
-        resp = requests.post(
-            "https://overpass-api.de/api/interpreter",
-            data={"data": query}, timeout=30
-        )
-        data = resp.json()
-        for el in data.get("elements", []):
-            if el.get("type") == "way" and "geometry" in el:
-                coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
-                if len(coords) >= 2:
-                    roads.append({
-                        "name":    el.get("tags", {}).get("name", ""),
-                        "highway": el.get("tags", {}).get("highway", "road"),
-                        "coords":  coords,
-                        "osm_id":  el.get("id"),
-                    })
-    except Exception as e:
-        pass
+    for mirror in mirrors:
+        try:
+            resp = requests.post(
+                mirror,
+                data={"data": query},
+                timeout=35,
+                headers={"User-Agent": "AirSensePro/1.0"}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            for el in data.get("elements", []):
+                if el.get("type") == "way" and "geometry" in el:
+                    coords = [(pt["lat"], pt["lon"]) for pt in el["geometry"]]
+                    if len(coords) >= 2:
+                        roads.append({
+                            "name":    el.get("tags", {}).get("name", ""),
+                            "highway": el.get("tags", {}).get("highway", "road"),
+                            "coords":  coords,
+                            "osm_id":  el.get("id"),
+                        })
+            if roads:
+                break   # success — stop trying mirrors
+        except Exception:
+            continue    # try next mirror
     return roads
 
 # ── 2. Fetch TomTom flow for a road segment ───────────
@@ -263,7 +273,7 @@ def build_street_aq_layer(fmap, lat, lon, grids, lats_arr, lons_arr,
 
     if not roads:
         st.warning("⚠️ No roads fetched from OSM. Street AQ layer skipped.")
-        return fmap
+        return fmap, []
 
     with st.spinner(f"📍 Interpolating AQ to {len(roads)} road segments..."):
         roads = interpolate_aq_to_roads(roads, grids, lats_arr, lons_arr)
@@ -273,6 +283,6 @@ def build_street_aq_layer(fmap, lat, lon, grids, lats_arr, lons_arr,
             roads = enrich_roads_with_traffic(roads, max_roads=50)
 
     roads = apply_traffic_weighting(roads)
-    fmap  = add_street_aq_layer(fmap, roads, active_param=active_param)
+    fmap = add_street_aq_layer(fmap, roads, active_param=active_param)
 
     return fmap, roads
