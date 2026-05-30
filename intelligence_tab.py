@@ -9,6 +9,7 @@ Assumes these variables already exist in scope (from app.py):
   ref_pm10, all_stations, selected_city, lat, lon
   elev_df (optional)
 """
+import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
@@ -18,20 +19,6 @@ from intelligence import (
     run_forecast_pipeline, attribute_sources,
     detect_events, generate_narrative, EVENT_TYPES
 )
-
-# ── Run pipeline (cached per city+data hash) ──────────────
-@st.cache_data(ttl=1800, show_spinner=False)
-def _run_pipeline(hist_json, weather_json, traffic_json, firms_len,
-                  terrain_, pop_m_):
-    import json
-    df_h = pd.read_json(hist_json)
-    if not df_h.empty and "timestamp" in df_h.columns:
-        df_h["timestamp"] = pd.to_datetime(df_h["timestamp"])
-    w_ = json.loads(weather_json)
-    t_ = json.loads(traffic_json)
-    import pandas as _pd
-    firms_ = _pd.DataFrame({"lat":[0]*firms_len}) if firms_len > 0 else _pd.DataFrame()
-    return run_forecast_pipeline(df_h, w_, t_, firms_, horizon_h=72)
 
 def render_intelligence_tab(df_hist, weather, traffic, firms_df,
                               terrain, pop_m, ref_pm10,
