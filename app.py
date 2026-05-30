@@ -1131,14 +1131,20 @@ with tab1:
         # Street-level AQI layer (toggle in controls)
         if show_streets:
             try:
-                fmap, street_roads = build_street_aq_layer(
+                result = build_street_aq_layer(
                     fmap, lat, lon, grids, lats, lons,
                     active_param=active_param,
                     radius_m=street_r,
                     fetch_traffic=True,
                 )
-                st.caption(f"🛣️ {len(street_roads)} road segments coloured by "
-                            f"{active_param.upper()} · Click any road for details")
+                # always returns (fmap, roads) — safe unpack
+                if isinstance(result, tuple) and len(result) == 2:
+                    fmap, street_roads = result
+                else:
+                    fmap, street_roads = result, []
+                if street_roads:
+                    st.caption(f"🛣️ {len(street_roads)} road segments coloured by "
+                                f"{active_param.upper()} · Click road for speed + AQI details")
             except Exception as _se:
                 st.warning(f"Street AQ: {_se}")
         st_folium(fmap, width=None, height=600, returned_objects=[])
