@@ -886,7 +886,7 @@ def build_folium_map(lat, lon, grids, lats, lons, lat_g, lon_g,
     # ── Custom JS for mouse-hover AQ value display ──
     # Build a small lat/lon → AQ value lookup embedded as JSON
     # Sample every 3rd grid point for compact JSON
-    step = max(1, grid_res // 20)
+    step = max(3, grid_res // 10)
     lookup = []
     for i in range(0, grid_res, step):
         for j in range(0, grid_res, step):
@@ -1123,25 +1123,27 @@ with tab1:
     col_map, col_info = st.columns([3, 1])
 
     with col_map:
+        # Build base map
         fmap = build_folium_map(
             lat, lon, grids, lats, lons, lat_g, lon_g,
             all_stations, firms_df, weather,
             active_param=active_param, opacity=map_opacity,
         )
-        # Street-level AQI layer (toggle in controls)
-        # Street-level AQI — always fast (no traffic API by default)
-        street_pts = []
+        # Street-level AQI — fast path, no external API calls
         if show_streets:
             try:
-                fmap, street_pts = build_street_aq_layer(
+                fmap, _street_pts = build_street_aq_layer(
                     fmap, lat, lon, grids, lats, lons,
                     active_param=active_param,
                     radius_m=street_r,
-                    fetch_traffic=False,   # fast render first
+                    fetch_traffic=False,
                 )
+                st.caption(f"🛣️ Street AQI active — {len(_street_pts)} grid points · "
+                            f"Showing {active_param.upper()} dispersion at street resolution")
             except Exception as _se:
                 st.warning(f"⚠️ Street AQ: {_se}")
-        st_folium(fmap, use_container_width=True, height=600, returned_objects=[])
+        # Render — explicit pixel width avoids streamlit-folium sizing bugs
+        st_folium(fmap, width=700, height=580, returned_objects=[])
 
     with col_info:
         st.markdown("**📡 Data Sources**")
