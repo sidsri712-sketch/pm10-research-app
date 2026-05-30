@@ -15,6 +15,7 @@ from scipy.interpolate import griddata
 from streamlit_autorefresh import st_autorefresh
 import datetime, time, json, math, warnings
 from intelligence import run_forecast_pipeline, attribute_sources, detect_events, generate_narrative, EVENT_TYPES
+from street_aq import build_street_aq_layer
 warnings.filterwarnings("ignore")
 
 # ══════════════════════════════════════════════════════
@@ -1117,6 +1118,19 @@ with tab1:
             all_stations, firms_df, weather,
             active_param=active_param, opacity=map_opacity,
         )
+        # Street-level AQI layer (toggle in controls)
+        if show_streets:
+            try:
+                fmap, street_roads = build_street_aq_layer(
+                    fmap, lat, lon, grids, lats, lons,
+                    active_param=active_param,
+                    radius_m=street_r,
+                    fetch_traffic=True,
+                )
+                st.caption(f"🛣️ {len(street_roads)} road segments coloured by "
+                            f"{active_param.upper()} · Click any road for details")
+            except Exception as _se:
+                st.warning(f"Street AQ: {_se}")
         st_folium(fmap, width=None, height=600, returned_objects=[])
 
     with col_info:
