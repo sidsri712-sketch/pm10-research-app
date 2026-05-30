@@ -151,10 +151,13 @@ def render_intelligence_tab(df_hist, weather, traffic, firms_df,
         # 24h / 48h dividers
         now = pd.Timestamp.now()
         for h, lbl in [(24,"24h"), (48,"48h")]:
-            fig_fc.add_vline(x=str(now + pd.Timedelta(hours=h)),
-                              line_dash="dash", line_color="rgba(255,255,255,0.2)",
-                              annotation_text=lbl,
-                              annotation_font_color="rgba(255,255,255,0.5)")
+            _vx = str((now + pd.Timedelta(hours=h)).isoformat())
+            fig_fc.add_shape(type="line", xref="x", yref="paper",
+                              x0=_vx, x1=_vx, y0=0, y1=1,
+                              line=dict(dash="dash", color="rgba(255,255,255,0.2)", width=1))
+            fig_fc.add_annotation(x=_vx, yref="paper", y=1.02,
+                                   text=lbl, showarrow=False,
+                                   font=dict(color="rgba(255,255,255,0.5)", size=11))
 
         fig_fc.update_layout(
             xaxis_title="Time", yaxis_title="PM10 (µg/m³)",
