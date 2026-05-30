@@ -264,25 +264,19 @@ def build_street_aq_layer(fmap, lat, lon, grids, lats_arr, lons_arr,
                             fetch_traffic=True):
     """
     Full pipeline: OSM roads → AQ interpolation → traffic weighting → map layer.
-    Returns updated fmap.
+    Always returns (fmap, roads) tuple.
     """
-    import streamlit as st
-
-    with st.spinner("🛣️ Fetching road network from OpenStreetMap..."):
-        roads = fetch_osm_roads(lat, lon, radius_m=radius_m)
+    roads = fetch_osm_roads(lat, lon, radius_m=radius_m)
 
     if not roads:
-        st.warning("⚠️ No roads fetched from OSM. Street AQ layer skipped.")
         return fmap, []
 
-    with st.spinner(f"📍 Interpolating AQ to {len(roads)} road segments..."):
-        roads = interpolate_aq_to_roads(roads, grids, lats_arr, lons_arr)
+    roads = interpolate_aq_to_roads(roads, grids, lats_arr, lons_arr)
 
     if fetch_traffic:
-        with st.spinner("🚗 Fetching TomTom traffic per road..."):
-            roads = enrich_roads_with_traffic(roads, max_roads=50)
+        roads = enrich_roads_with_traffic(roads, max_roads=50)
 
     roads = apply_traffic_weighting(roads)
-    fmap = add_street_aq_layer(fmap, roads, active_param=active_param)
+    fmap  = add_street_aq_layer(fmap, roads, active_param=active_param)
 
     return fmap, roads
