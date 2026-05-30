@@ -1128,7 +1128,16 @@ with tab4:
         df_scatter["congestion_proxy"] = (df_scatter["timestamp"].dt.hour.isin(range(8,10)) |
                                            df_scatter["timestamp"].dt.hour.isin(range(17,20))).astype(int) * 40
         fig_sc = px.scatter(df_scatter, x="congestion_proxy", y="pm10",
-                             trendline="ols", color_discrete_sequence=["#ff6b35"])
+                             color_discrete_sequence=["#ff6b35"],
+                             title="PM10 vs Traffic Congestion")
+        _x = df_scatter["congestion_proxy"].values
+        _y = df_scatter["pm10"].values
+        if len(np.unique(_x)) > 1:
+            _m, _b = np.polyfit(_x, _y, 1)
+            _xr = np.array([_x.min(), _x.max()])
+            fig_sc.add_trace(go.Scatter(x=_xr, y=_m*_xr+_b,
+                                         mode="lines", name="Trend",
+                                         line=dict(color="white", width=2, dash="dot")))
         fig_sc.update_layout(paper_bgcolor="#0e1117", plot_bgcolor="#1a1d27", font_color="white")
         st.plotly_chart(fig_sc, use_container_width=True)
 
@@ -1168,8 +1177,16 @@ with tab5:
             with dc1:
                 st.metric("MAE",  f"{mae:.2f} µg/m³")
                 st.metric("RMSE", f"{rmse:.2f} µg/m³")
-                fig_r = px.scatter(res, x="Actual", y="Predicted", trendline="ols",
+                fig_r = px.scatter(res, x="Actual", y="Predicted",
                                    title="Actual vs Predicted", color_discrete_sequence=["#ff6b35"])
+                _xa = res["Actual"].values
+                _xp = res["Predicted"].values
+                if len(_xa) > 1:
+                    _m2, _b2 = np.polyfit(_xa, _xp, 1)
+                    _xr2 = np.array([_xa.min(), _xa.max()])
+                    fig_r.add_trace(go.Scatter(x=_xr2, y=_m2*_xr2+_b2,
+                                               mode="lines", name="Fit",
+                                               line=dict(color="#ff6b35", width=2)))
                 fig_r.add_shape(type="line", x0=res.Actual.min(), y0=res.Actual.min(),
                                 x1=res.Actual.max(), y1=res.Actual.max(),
                                 line=dict(dash="dash", color="white"))
