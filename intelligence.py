@@ -858,3 +858,127 @@ def _pm_cat(v):
     if v <= 350: return "Very Poor"
     if v <= 430: return "Severe"
     return "Hazardous"
+
+
+# ══════════════════════════════════════════════════════
+# 11. LOOCV BIAS CORRECTION ENGINE
+# ══════════════════════════════════════════════════════
+def run_loocv_calibration(df: pd.DataFrame, weather: dict, traffic: dict):
+    """
+    Full Leave-One-Out Cross Validation across all sensor stations.
+    Returns:
+      - bias: systematic over/under prediction (µg/m³)
+      - bias_pct: percentage bias
+      - rmse, mae
+      - correction_factor: multiply forecasts by this to debias
+      - per_station: dict of station-level errors
+      - residuals: array of (actual - predicted) for each fold
+      - error_std: std of residuals → used as extra uncertainty band
+    """
+    from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+    df_f = build_features(df)
+    cols  = [c for c in FEATURE_COLS if c in df_f.columns]
+    df_f  = df_f.dropna(subset=cols + ["pm10"])
+
+    if len(df_f) < 4:
+        return {
+            "bias": 0.0, "bias_pct": 0.0, "mae": None, "rmse": None,
+            "correction_factor": 1.0, "per_station": {},
+            "residuals": np.array([]), "error_std": 0.0,
+            "n_folds": 0, "calibrated": False,
+        }
+
+    preds, actuals, indices = [], [], []
+
+    for i in range(len(df_f)):
+        train = df_f.drop(df_f.index[i])
+        test  = df_f.iloc[[i]]
+        if len(train) < 3:
+            continue
+        sc_ = StandardScaler()
+        Xtr = sc_.fit_transform(train[cols])
+        Xte = sc_.transform(test[cols])
+        rf_ = RandomForestRegressor(n_estimators=150, max_depth=7,
+                                     random_state=42, n_jobs=-1)
+        rf_.fit(Xtr, np.log1p(train["pm10"].values))
+        pred = float(np.expm1(rf_.predict(Xte)[0]))
+        preds.append(pred)
+        actuals.append(float(test["pm10"].values[0]))
+        indices.append(df_f.index[i])
+
+    if not preds:
+        return {"bias":0.0,"bias_pct":0.0,"mae":None,"rmse":None,
+                "correction_factor":1.0,"per_station":{},"residuals":np.array([]),
+                "error_std":0.0,"n_folds":0,"calibrated":False}
+
+    actuals_arr = np.array(actuals)
+    preds_arr   = np.array(preds)
+    residuals   = actuals_arr - preds_arr       # positive = underprediction
+
+    bias      = float(np.mean(residuals))       # mean error
+    bias_pct  = float(bias / max(np.mean(actuals_arr), 1) * 100)
+    mae       = float(mean_absolute_error(actuals_arr, preds_arr))
+    rmse      = float(np.sqrt(mean_squared_error(actuals_arr, preds_arr)))
+    error_std = float(np.std(residuals))
+
+    # Correction factor: scale predictions so mean bias → 0
+    # If model underpredicts by 10 µg/m³ on average, add 10 µg/m³ offset
+    correction_offset = bias          # additive correction (better than multiplicative)
+    correction_factor = float(np.mean(actuals_arr) / max(np.mean(preds_arr), 1))
+
+    # Per-station breakdown (group by lat/lon rounded)
+    per_station = {}
+    if "lat" in df_f.columns and "lon" in df_f.columns:
+        df_res = df_f.iloc[[df_f.index.get_loc(i) for i in indices if i in df_f.index]].copy()
+        df_res = df_res.reset_index(drop=True)
+        df_res["pred"]     = preds_arr
+        df_res["actual"]   = actuals_arr
+        df_res["residual"] = residuals
+        for _, grp in df_res.groupby([df_res["lat"].round(3), df_res["lon"].round(3)]):
+            key = f"{grp['lat'].iloc[0]:.3f},{grp['lon'].iloc[0]:.3f}"
+            per_station[key] = {
+                "bias": round(float(grp["residual"].mean()), 2),
+                "mae":  round(float(grp["residual"].abs().mean()), 2),
+                "n":    len(grp),
+            }
+
+    return {
+        "bias":              round(bias, 2),
+        "bias_pct":          round(bias_pct, 1),
+        "mae":               round(mae, 2),
+        "rmse":              round(rmse, 2),
+        "correction_offset": round(correction_offset, 2),
+        "correction_factor": round(correction_factor, 4),
+        "per_station":       per_station,
+        "residuals":         residuals,
+        "error_std":         round(error_std, 2),
+        "n_folds":           len(preds),
+        "calibrated":        True,
+        "actuals":           actuals_arr,
+        "preds":             preds_arr,
+    }
+
+
+def apply_loocv_correction(forecast_df: pd.DataFrame, loocv: dict) -> pd.DataFrame:
+    """
+    Apply LOOCV bias correction + widen uncertainty bands by error_std.
+    Returns corrected forecast_df.
+    """
+    if not loocv.get("calibrated") or forecast_df.empty:
+        return forecast_df
+
+    df = forecast_df.copy()
+    offset    = loocv["correction_offset"]
+    error_std = loocv["error_std"]
+
+    df["pm10_mean"]  = (df["pm10_mean"]  + offset).clip(lower=0)
+    df["pm10_lower"] = (df["pm10_lower"] + offset - error_std).clip(lower=0)
+    df["pm10_upper"] = (df["pm10_upper"] + offset + error_std).clip(lower=0)
+
+    # Also correct individual model predictions
+    for col in ["xgb", "rf", "prophet", "lstm"]:
+        if col in df.columns:
+            df[col] = (df[col] + offset).clip(lower=0)
+
+    return df
