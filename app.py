@@ -456,7 +456,7 @@ def build_nss_model(df_hist):
 
 def forecast_24h(rf, scaler, features, lat, lon, weather, df_live_pm10_mean):
     now = pd.Timestamp.now()
-    future_times = pd.date_range(start=now.ceil("H"), periods=24, freq="H")
+    future_times = pd.date_range(start=now.ceil("h"), periods=24, freq="h")
     current_lag = df_live_pm10_mean
     results = []
     for ft in future_times:
@@ -489,78 +489,183 @@ def wind_rose(wind_deg, wind_speed):
     return fig
 
 # ─────────────────────────────────────────────
-# 3D PYDECK MAP
+# AQ COLOR HELPERS FOR MAP
 # ─────────────────────────────────────────────
-def make_3d_map(lat, lon, elev_df, stations_df, pm10_val, traffic):
-    # Elevation layer
-    elev_layer = pdk.Layer(
-        "GridCellLayer",
-        data=elev_df.rename(columns={"lon":"longitude","lat":"latitude"}),
-        get_position=["longitude","latitude"],
-        get_elevation="elev",
-        elevation_scale=5,
-        get_fill_color=[180, 140, 100, 120],
-        cell_size=500,
-        pickable=True,
-    )
+def aq_color(val, max_val):
+    ratio = min(val / max(max_val, 1), 1.0)
+    if ratio < 0.2:  return [0, 228, 0, 190]
+    if ratio < 0.4:  return [255, 255, 0, 190]
+    if ratio < 0.6:  return [255, 126, 0, 210]
+    if ratio < 0.8:  return [255, 0, 0, 220]
+    return [143, 63, 151, 235]
 
-    # PM10 heatmap
+def make_heatmap_layer(stations_df, lat, lon, param, fallback_val):
     heat_data = []
-    if not stations_df.empty:
+    if not stations_df.empty and param in stations_df.columns:
         for _, row in stations_df.iterrows():
-            heat_data.append({"lat": row["lat"], "lon": row["lon"], "weight": row.get("pm10", pm10_val)})
-    else:
-        heat_data = [{"lat": lat + np.random.normal(0, 0.02),
-                      "lon": lon + np.random.normal(0, 0.02),
-                      "weight": pm10_val} for _ in range(30)]
-
-    heatmap_layer = pdk.Layer(
+            v = row.get(param)
+            if v is not None and not (isinstance(v, float) and np.isnan(v)):
+                heat_data.append({"lat": row["lat"], "lon": row["lon"], "weight": float(v)})
+    if not heat_data:
+        np.random.seed(42)
+        for _ in range(40):
+            heat_data.append({
+                "lat": lat + np.random.normal(0, 0.025),
+                "lon": lon + np.random.normal(0, 0.025),
+                "weight": fallback_val * np.random.uniform(0.6, 1.4),
+            })
+    return pdk.Layer(
         "HeatmapLayer",
         data=pd.DataFrame(heat_data),
-        get_position=["lon","lat"],
+        get_position=["lon", "lat"],
         get_weight="weight",
-        radiusPixels=80,
-        intensity=1.2,
-        threshold=0.05,
+        radiusPixels=90, intensity=1.3, threshold=0.04,
         color_range=[
-            [0,228,0,180],[255,255,0,180],[255,126,0,180],
-            [255,0,0,200],[143,63,151,220],[126,0,35,255]
+            [0,228,0,160],[255,255,0,180],[255,126,0,200],
+            [255,0,0,215],[143,63,151,230],[126,0,35,255],
         ],
     )
 
-    # Station scatter
-    station_layer = None
-    if not stations_df.empty:
-        s_data = stations_df.copy()
-        s_data["color"] = s_data["pm10"].apply(lambda v:
-            [0,228,0] if v<=50 else [255,255,0] if v<=100 else
-            [255,126,0] if v<=250 else [255,0,0] if v<=350 else [143,63,151])
-        station_layer = pdk.Layer(
-            "ScatterplotLayer",
-            data=s_data,
-            get_position=["lon","lat"],
-            get_color="color",
-            get_radius=500,
-            pickable=True,
-            auto_highlight=True,
-        )
-
-    layers = [elev_layer, heatmap_layer]
-    if station_layer:
-        layers.append(station_layer)
-
-    view = pdk.ViewState(
-        latitude=lat, longitude=lon,
-        zoom=11, pitch=50, bearing=0
+def make_column_layer(stations_df, param, col_color):
+    data = []
+    if stations_df.empty or param not in stations_df.columns:
+        return None
+    for _, row in stations_df.iterrows():
+        v = row.get(param)
+        if v is not None and not (isinstance(v, float) and np.isnan(v)):
+            data.append({
+                "lat": row["lat"], "lon": row["lon"],
+                "value": max(float(v), 0),
+                "name":  row.get("name", ""),
+                "param": param.upper(),
+            })
+    if not data:
+        return None
+    return pdk.Layer(
+        "ColumnLayer",
+        data=pd.DataFrame(data),
+        get_position=["lon", "lat"],
+        get_elevation="value",
+        elevation_scale=80,
+        radius=280,
+        get_fill_color=col_color,
+        pickable=True,
+        auto_highlight=True,
+        coverage=0.9,
     )
 
-    tooltip = {"text": "PM10: {weight} µg/m³\nElevation: {elev}m"}
+# ─────────────────────────────────────────────
+# 3D PYDECK MAP — real satellite basemap + all AQ params
+# ─────────────────────────────────────────────
+def make_3d_map(lat, lon, elev_df, stations_df, weather_data, aq_param="pm10",
+                show_heatmap=True, show_columns=True, show_wind=True,
+                pitch=55, bearing=0):
+
+    layers = []
+
+    # ── 1. TERRAIN GRID ────────────────────────────────────────────────
+    elev_plot = elev_df.rename(columns={"lon": "longitude", "lat": "latitude"}).copy()
+    elev_plot["elev"] = elev_plot["elev"].clip(lower=0)
+    layers.append(pdk.Layer(
+        "GridCellLayer",
+        data=elev_plot,
+        get_position=["longitude", "latitude"],
+        get_elevation="elev",
+        elevation_scale=3,
+        get_fill_color=[80, 120, 80, 80],
+        cell_size=400,
+        pickable=True,
+        extruded=True,
+    ))
+
+    # ── 2. HEATMAP for chosen AQ param ────────────────────────────────
+    if show_heatmap:
+        fallback = stations_df["pm10"].mean() if not stations_df.empty and "pm10" in stations_df.columns else 80
+        layers.append(make_heatmap_layer(stations_df, lat, lon, aq_param, fallback))
+
+    # ── 3. 3D COLUMN BARS (height = AQ value) ─────────────────────────
+    if show_columns and not stations_df.empty:
+        param_colors = {
+            "pm10": [255, 107, 53,  220],
+            "pm25": [255, 50,  50,  220],
+            "aqi":  [200, 100, 255, 220],
+            "no2":  [50,  180, 255, 220],
+            "o3":   [100, 220, 100, 220],
+            "so2":  [255, 220, 50,  220],
+            "co":   [200, 80,  80,  220],
+        }
+        col_color = param_colors.get(aq_param, [255, 107, 53, 220])
+        col_layer = make_column_layer(stations_df, aq_param, col_color)
+        if col_layer:
+            layers.append(col_layer)
+
+    # ── 4. STATION SCATTER (colored by PM10 AQI) ──────────────────────
+    if not stations_df.empty:
+        s_data = stations_df.copy()
+        pm10_max = s_data["pm10"].max() if "pm10" in s_data.columns else 200
+
+        def build_row_color(row):
+            v = row.get("pm10", 80)
+            return aq_color(float(v), pm10_max)
+
+        def build_tip(row):
+            parts = [f"📍 {row.get('name','')}"]
+            for p, unit in [("pm10","µg/m³"),("pm25","µg/m³"),("aqi",""),
+                             ("no2","µg/m³"),("o3","µg/m³"),("so2","µg/m³"),("co","mg/m³")]:
+                v = row.get(p)
+                if v is not None and not (isinstance(v, float) and np.isnan(v)):
+                    parts.append(f"{p.upper()}: {round(float(v),1)} {unit}")
+            return " | ".join(parts)
+
+        s_data["r_color"]      = s_data.apply(build_row_color, axis=1)
+        s_data["tooltip_text"] = s_data.apply(build_tip, axis=1)
+
+        layers.append(pdk.Layer(
+            "ScatterplotLayer",
+            data=s_data,
+            get_position=["lon", "lat"],
+            get_fill_color="r_color",
+            get_radius=420,
+            pickable=True,
+            auto_highlight=True,
+            opacity=0.95,
+        ))
+
+    # ── 5. WIND ARROW TEXT LAYER ──────────────────────────────────────
+    if show_wind and weather_data:
+        wd = weather_data.get("wind_deg", 0)
+        ws = weather_data.get("wind_speed", 0)
+        arrow = ("→" if 45<=wd<135 else "↓" if 135<=wd<225
+                 else "←" if 225<=wd<315 else "↑")
+        sz = max(14, int(ws * 2.5))
+        wind_pts = [
+            {"lat": lat+dla, "lon": lon+dlo, "text": arrow, "size": sz}
+            for dla in np.linspace(-0.12, 0.12, 5)
+            for dlo in np.linspace(-0.12, 0.12, 5)
+        ]
+        layers.append(pdk.Layer(
+            "TextLayer",
+            data=pd.DataFrame(wind_pts),
+            get_position=["lon", "lat"],
+            get_text="text",
+            get_size="size",
+            get_color=[100, 200, 255, 200],
+            pickable=False,
+        ))
+
+    # ── 6. VIEW + DECK ────────────────────────────────────────────────
+    view = pdk.ViewState(
+        latitude=lat, longitude=lon,
+        zoom=12, pitch=pitch, bearing=bearing,
+        min_zoom=8, max_zoom=18,
+    )
 
     return pdk.Deck(
         layers=layers,
         initial_view_state=view,
-        tooltip=tooltip,
-        map_style="mapbox://styles/mapbox/dark-v10",
+        tooltip={"text": "{tooltip_text}"},
+        # CartoDB Dark Matter — free, no token needed, real buildings + streets
+        map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
     )
 
 # ─────────────────────────────────────────────
@@ -670,16 +775,57 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # TAB 1 — 3D MAP
 # ════════════════════════════════════════════
 with tab1:
-    st.subheader(f"🗺️ 3D Terrain + PM10 Heatmap — {selected_city}")
+    st.subheader(f"🗺️ 3D Terrain + Air Quality Map — {selected_city}")
+
+    # ── Controls row ───────────────────────────────────────────────────
+    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    aq_param_sel = mc1.selectbox(
+        "🌫️ Parameter",
+        ["pm10","pm25","aqi","no2","o3","so2","co"],
+        format_func=lambda x: {
+            "pm10":"PM10 (µg/m³)","pm25":"PM2.5 (µg/m³)","aqi":"AQI",
+            "no2":"NO₂ (µg/m³)","o3":"O₃ (µg/m³)","so2":"SO₂ (µg/m³)","co":"CO (mg/m³)"
+        }[x]
+    )
+    show_hm   = mc2.checkbox("🌡️ Heatmap",   value=True)
+    show_col  = mc3.checkbox("📊 3D Bars",    value=True)
+    show_wind = mc4.checkbox("💨 Wind Arrows",value=True)
+    map_pitch = mc5.slider("🎥 Pitch", 0, 80, 55)
 
     col1, col2 = st.columns([3, 1])
 
     with col1:
-        deck = make_3d_map(lat, lon, elev_df, all_stations, pm10_val, traffic)
-        st.pydeck_chart(deck)
+        # Enrich all_stations with OWM AQ data if no sensor values for params
+        stations_enriched = all_stations.copy() if not all_stations.empty else pd.DataFrame()
+        for owm_key, col_name in [("owm_pm25","pm25"),("owm_no2","no2"),
+                                   ("owm_o3","o3"),("owm_so2","so2"),("owm_co","co")]:
+            if not stations_enriched.empty and col_name not in stations_enriched.columns:
+                stations_enriched[col_name] = weather.get(owm_key)
+
+        deck = make_3d_map(
+            lat, lon, elev_df, stations_enriched, weather,
+            aq_param=aq_param_sel,
+            show_heatmap=show_hm,
+            show_columns=show_col,
+            show_wind=show_wind,
+            pitch=map_pitch,
+        )
+        st.pydeck_chart(deck, use_container_width=True)
+
+        # ── Legend ────────────────────────────────────────────────────
+        st.markdown("""
+        <div style='display:flex;gap:10px;margin-top:6px;flex-wrap:wrap;font-size:12px'>
+          <span style='background:#00e400;padding:3px 10px;border-radius:12px;color:black'>● Good ≤50</span>
+          <span style='background:#ffff00;padding:3px 10px;border-radius:12px;color:black'>● Moderate ≤100</span>
+          <span style='background:#ff7e00;padding:3px 10px;border-radius:12px;color:white'>● Poor ≤250</span>
+          <span style='background:#ff0000;padding:3px 10px;border-radius:12px;color:white'>● Very Poor ≤350</span>
+          <span style='background:#8f3f97;padding:3px 10px;border-radius:12px;color:white'>● Severe ≤430</span>
+          <span style='background:#7e0023;padding:3px 10px;border-radius:12px;color:white'>● Hazardous 430+</span>
+        </div>
+        """, unsafe_allow_html=True)
 
     with col2:
-        st.markdown("**📡 Data Sources Active**")
+        st.markdown("**📡 Data Sources**")
         st.success("✅ OpenWeather")
         st.success("✅ TomTom Traffic")
         st.success("✅ Open-Elevation")
@@ -692,32 +838,128 @@ with tab1:
         if not firms_df.empty:
             st.success(f"✅ NASA FIRMS ({len(firms_df)} hotspots)")
         else:
-            st.info("🛰️ NASA FIRMS: No fires nearby")
+            st.info("🛰️ No nearby fires")
 
         st.markdown("---")
-        st.markdown("**🏔️ Terrain Effect**")
+        st.markdown("**🏔️ Terrain**")
         tf = terrain_pm10_factor(terrain)
-        st.metric("Terrain Factor", f"{tf:.2f}×",
-                  delta="traps pollution" if tf>1 else "disperses pollution")
+        st.metric("Factor", f"{tf:.2f}×",
+                  delta="traps pollution" if tf > 1 else "disperses pollution")
 
         st.markdown("**🔥 Pollution Drivers**")
         drivers = []
-        if traffic.get("congestion_index",0) > 30: drivers.append("🚗 Heavy Traffic")
-        if weather.get("wind_speed",10) < 5:       drivers.append("💨 Low Wind")
-        if weather.get("humidity",50) > 75:         drivers.append("💧 High Humidity")
-        if terrain in ["valley","arid","semi-arid"]: drivers.append("🏔️ Terrain Trapping")
-        if not firms_df.empty:                       drivers.append("🔥 Fire Hotspots")
-        if drivers:
-            for d in drivers: st.warning(d)
-        else:
-            st.success("✅ Conditions favorable")
+        if traffic.get("congestion_index", 0) > 30:        drivers.append("🚗 Heavy Traffic")
+        if weather.get("wind_speed", 10) < 5:              drivers.append("💨 Low Wind")
+        if weather.get("humidity", 50) > 75:               drivers.append("💧 High Humidity")
+        if terrain in ["valley","arid","semi-arid"]:       drivers.append("🏔️ Terrain Trap")
+        if not firms_df.empty:                              drivers.append("🔥 Fire Hotspots")
+        for d in drivers: st.warning(d)
+        if not drivers: st.success("✅ Conditions favorable")
+
+    # ── All AQ Parameters Dashboard ───────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🧪 All Air Quality Parameters")
+
+    # Collect values from all sources
+    aq_values = {
+        "PM10":  waqi_city.get("pm10")  or weather.get("owm_pm10"),
+        "PM2.5": waqi_city.get("pm25")  or weather.get("owm_pm25"),
+        "AQI":   waqi_city.get("aqi"),
+        "NO₂":   waqi_city.get("no2")   or weather.get("owm_no2"),
+        "O₃":    waqi_city.get("o3")    or weather.get("owm_o3"),
+        "SO₂":   waqi_city.get("so2")   or weather.get("owm_so2"),
+        "CO":    waqi_city.get("co")    or weather.get("owm_co"),
+    }
+    aq_limits = {"PM10":100,"PM2.5":60,"AQI":100,"NO₂":80,"O₃":100,"SO₂":80,"CO":10}
+    aq_units  = {"PM10":"µg/m³","PM2.5":"µg/m³","AQI":"","NO₂":"µg/m³","O₃":"µg/m³","SO₂":"µg/m³","CO":"mg/m³"}
+
+    # Metric cards
+    cols_aq = st.columns(len(aq_values))
+    for i, (name, val) in enumerate(aq_values.items()):
+        with cols_aq[i]:
+            if val is not None:
+                limit = aq_limits[name]
+                pct   = min(val / limit, 2.0)
+                color = ("#00e400" if pct < 0.5 else "#ffff00" if pct < 1.0
+                         else "#ff7e00" if pct < 1.5 else "#ff0000")
+                st.markdown(f"""
+                <div style='background:#1a1d27;border-radius:10px;padding:10px;
+                            border-left:4px solid {color};text-align:center'>
+                  <div style='font-size:11px;color:#aaa'>{name}</div>
+                  <div style='font-size:1.4rem;font-weight:700;color:{color}'>{val:.1f}</div>
+                  <div style='font-size:10px;color:#888'>{aq_units[name]}</div>
+                </div>""", unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div style='background:#1a1d27;border-radius:10px;padding:10px;
+                            border-left:4px solid #444;text-align:center'>
+                  <div style='font-size:11px;color:#aaa'>{name}</div>
+                  <div style='font-size:1rem;color:#666'>N/A</div>
+                </div>""", unsafe_allow_html=True)
+
+    # Radar / spider chart of all AQ params
+    st.markdown("#### 📡 Pollutant Radar Chart")
+    radar_vals = {k: v for k, v in aq_values.items() if v is not None}
+    if len(radar_vals) >= 3:
+        # Normalize each to 0-100 scale vs WHO limit
+        norm = {k: min(v / aq_limits[k] * 100, 200) for k, v in radar_vals.items()}
+        fig_radar = go.Figure(go.Scatterpolar(
+            r=list(norm.values()),
+            theta=list(norm.keys()),
+            fill="toself",
+            fillcolor="rgba(255,107,53,0.25)",
+            line=dict(color="#ff6b35", width=2),
+            marker=dict(size=8, color="#ff6b35"),
+            name="Pollutant Level (% of WHO limit)",
+        ))
+        fig_radar.add_trace(go.Scatterpolar(
+            r=[100]*len(norm), theta=list(norm.keys()),
+            mode="lines", line=dict(color="white", width=1, dash="dot"),
+            name="WHO Safe Limit (100%)",
+        ))
+        fig_radar.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=True, range=[0, 200], tickfont=dict(color="white")),
+                angularaxis=dict(tickfont=dict(color="white")),
+                bgcolor="#1a1d27",
+            ),
+            paper_bgcolor="#0e1117", font_color="white",
+            legend=dict(bgcolor="#1a1d27"),
+            height=400, margin=dict(t=20,b=20),
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
+
+    # Bar chart comparison
+    if radar_vals:
+        fig_bar = go.Figure()
+        for name, val in radar_vals.items():
+            limit = aq_limits[name]
+            pct   = val / limit
+            clr   = ("#00e400" if pct<0.5 else "#ffff00" if pct<1.0
+                     else "#ff7e00" if pct<1.5 else "#ff0000")
+            fig_bar.add_trace(go.Bar(
+                x=[name], y=[val], name=name,
+                marker_color=clr,
+                text=f"{val:.1f} {aq_units[name]}", textposition="outside",
+            ))
+        fig_bar.update_layout(
+            title="Live Pollutant Levels",
+            paper_bgcolor="#0e1117", plot_bgcolor="#1a1d27",
+            font_color="white", showlegend=False,
+            height=350, margin=dict(t=40,b=20),
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
 
     # Station table
     if not all_stations.empty:
         st.markdown("**📍 Monitoring Stations**")
-        disp = all_stations[["name","lat","lon","pm10"]].copy()
-        disp["Category"] = disp["pm10"].apply(lambda v: pm10_category(v)[0])
-        st.dataframe(disp, use_container_width=True)
+        disp = all_stations.copy()
+        for col_show in ["pm10","pm25","aqi","no2","o3","so2","co"]:
+            if col_show not in disp.columns:
+                disp[col_show] = None
+        disp["Category"] = disp["pm10"].apply(lambda v: pm10_category(v)[0] if v else "N/A")
+        st.dataframe(disp[["name","lat","lon","pm10","pm25","aqi","no2","o3","so2","co","Category"]],
+                     use_container_width=True)
 
 # ════════════════════════════════════════════
 # TAB 2 — FORECAST
@@ -971,7 +1213,7 @@ with tab6:
         st.metric("Records in Selected Range", len(df_f))
 
         if not df_f.empty:
-            fig_h = px.line(df_f.set_index("timestamp").resample("H").mean(numeric_only=True).reset_index(),
+            fig_h = px.line(df_f.set_index("timestamp").resample("h").mean(numeric_only=True).reset_index(),
                              x="timestamp", y="pm10", title="Historical PM10 Trend",
                              color_discrete_sequence=["#ff6b35"])
             fig_h.update_layout(paper_bgcolor="#0e1117", plot_bgcolor="#1a1d27", font_color="white")
