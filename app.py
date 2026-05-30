@@ -14,6 +14,7 @@ from scipy.ndimage import gaussian_filter
 from scipy.interpolate import griddata
 from streamlit_autorefresh import st_autorefresh
 import datetime, time, json, math, warnings
+from intelligence import run_forecast_pipeline, attribute_sources, detect_events, generate_narrative, EVENT_TYPES
 warnings.filterwarnings("ignore")
 
 # ══════════════════════════════════════════════════════
@@ -1096,9 +1097,9 @@ with st.spinner("🧮 Computing Gaussian plume dispersion grid..."):
 # ══════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "🗺️ Interactive Map", "📈 Forecast", "🌤️ Weather", 
-    "🚗 Traffic", "📊 Diagnostics", "📂 History"
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "🗺️ Interactive Map", "📈 Forecast", "🌤️ Weather",
+    "🚗 Traffic", "🧠 Intelligence", "📊 Diagnostics", "📂 History"
 ])
 
 # ════════════════════════════════════════
@@ -1410,7 +1411,7 @@ with tab5:
 # ════════════════════════════════════════
 # TAB 6 — HISTORY
 # ════════════════════════════════════════
-with tab6:
+with tab7:
     st.subheader("📂 Historical Database")
     if not df_hist.empty:
         df_f = df_hist[
@@ -1430,6 +1431,25 @@ with tab6:
                                "airsense_history.csv", "text/csv")
     else:
         st.info("No historical data yet.")
+
+
+# ════════════════════════════════════════
+# TAB 5 — INTELLIGENCE
+# ════════════════════════════════════════
+with tab5:
+    # Import and run the intelligence renderer
+    from intelligence_tab import render_intelligence_tab
+    render_intelligence_tab(
+        df_hist=df_hist,
+        weather=weather,
+        traffic=traffic,
+        firms_df=firms_df,
+        terrain=terrain,
+        pop_m=pop_m,
+        ref_pm10=ref_pm10,
+        all_stations=all_stations,
+        selected_city=selected_city,
+    )
 
 # ══════════════════════════════════════════════════════
 # COMPARE MODE
