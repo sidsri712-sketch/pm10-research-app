@@ -17,7 +17,8 @@ import pandas as pd
 import numpy as np
 from intelligence import (
     run_forecast_pipeline, attribute_sources,
-    detect_events, generate_narrative, EVENT_TYPES
+    detect_events, generate_narrative, EVENT_TYPES,
+    run_loocv_calibration, apply_loocv_correction,
 )
 
 def render_intelligence_tab(df_hist, weather, traffic, firms_df,
@@ -40,6 +41,14 @@ def render_intelligence_tab(df_hist, weather, traffic, firms_df,
     fi          = pipeline.get("feature_importance", {})
     decomp      = pipeline.get("decomposition", {})
     trained     = pipeline.get("trained", False)
+
+    # ── LOOCV Calibration ──
+    with st.spinner("🔬 Running LOOCV bias calibration..."):
+        loocv = run_loocv_calibration(df_hist, weather, traffic)
+
+    # Apply bias correction to forecast
+    if not forecast_df.empty and loocv.get("calibrated"):
+        forecast_df = apply_loocv_correction(forecast_df, loocv)
 
     # ── Attribution ──
     attribution = attribute_sources(
@@ -199,6 +208,103 @@ def render_intelligence_tab(df_hist, weather, traffic, firms_df,
         # Show physics-based simple forecast instead
         if not weather.get("forecast_df", pd.DataFrame()).empty:
             st.markdown("*Showing physics-based estimate while data accumulates:*")
+
+    st.markdown("---")
+
+    # ════════════════════════════════════════
+    # LOOCV CALIBRATION REPORT
+    # ════════════════════════════════════════
+    st.markdown("#### 🔬 LOOCV Bias Calibration — Model Self-Correction")
+
+    if loocv.get("calibrated"):
+        lc1, lc2, lc3, lc4, lc5 = st.columns(5)
+        bias_color = "#ff6b35" if abs(loocv["bias"]) > 10 else "#00e400"
+        lc1.metric("Systematic Bias",
+                   f"{loocv['bias']:+.1f} µg/m³",
+                   delta="corrected ✓" if loocv["calibrated"] else None)
+        lc2.metric("Bias %",        f"{loocv['bias_pct']:+.1f}%")
+        lc3.metric("MAE",           f"{loocv['mae']:.2f} µg/m³")
+        lc4.metric("RMSE",          f"{loocv['rmse']:.2f} µg/m³")
+        lc5.metric("Error Std σ",   f"{loocv['error_std']:.2f} µg/m³")
+
+        # Bias interpretation
+        bias = loocv["bias"]
+        if abs(bias) < 3:
+            st.success(f"✅ Model is well-calibrated. Bias of {bias:+.1f} µg/m³ is within acceptable range. No significant correction needed.")
+        elif bias > 0:
+            st.warning(f"⚠️ Model **underpredicts** by {bias:.1f} µg/m³ on average. "
+                        f"All forecasts have been shifted up by {bias:.1f} µg/m³ to correct this.")
+        else:
+            st.warning(f"⚠️ Model **overpredicts** by {abs(bias):.1f} µg/m³ on average. "
+                        f"All forecasts have been shifted down by {abs(bias):.1f} µg/m³ to correct this.")
+
+        # Residual distribution plot
+        residuals = loocv.get("residuals", np.array([]))
+        if len(residuals) > 0:
+            col_res1, col_res2 = st.columns(2)
+            with col_res1:
+                fig_res = go.Figure()
+                fig_res.add_trace(go.Histogram(
+                    x=residuals, nbinsx=20,
+                    marker_color="#3d5a80",
+                    name="Residuals",
+                ))
+                fig_res.add_vline(x=0, line_dash="dash", line_color="white",
+                                   annotation_text="Zero bias")
+                fig_res.add_vline(x=float(np.mean(residuals)),
+                                   line_dash="dot", line_color="#ff6b35",
+                                   annotation_text=f"Mean={np.mean(residuals):.1f}")
+                fig_res.update_layout(
+                    title="Residual Distribution (Actual − Predicted)",
+                    xaxis_title="Residual (µg/m³)",
+                    paper_bgcolor="#0e1117", plot_bgcolor="#1a1d27",
+                    font_color="white", height=280, margin=dict(t=40,b=30))
+                st.plotly_chart(fig_res, use_container_width=True)
+
+            with col_res2:
+                if loocv.get("actuals") is not None and loocv.get("preds") is not None:
+                    actuals_arr = loocv["actuals"]
+                    preds_arr   = loocv["preds"]
+                    # Corrected preds
+                    preds_corr  = preds_arr + loocv["correction_offset"]
+                    fig_cv = go.Figure()
+                    fig_cv.add_trace(go.Scatter(
+                        x=actuals_arr, y=preds_arr,
+                        mode="markers", name="Raw predictions",
+                        marker=dict(color="#888", size=7, opacity=0.6)))
+                    fig_cv.add_trace(go.Scatter(
+                        x=actuals_arr, y=preds_corr,
+                        mode="markers", name="Bias-corrected",
+                        marker=dict(color="#ff6b35", size=7)))
+                    # Perfect line
+                    mn = min(actuals_arr.min(), preds_arr.min())
+                    mx = max(actuals_arr.max(), preds_arr.max())
+                    fig_cv.add_trace(go.Scatter(
+                        x=[mn, mx], y=[mn, mx], mode="lines",
+                        line=dict(dash="dash", color="white", width=1),
+                        name="Perfect fit"))
+                    fig_cv.update_layout(
+                        title="LOOCV: Actual vs Predicted",
+                        xaxis_title="Actual PM10", yaxis_title="Predicted PM10",
+                        paper_bgcolor="#0e1117", plot_bgcolor="#1a1d27",
+                        font_color="white", height=280, margin=dict(t=40,b=30))
+                    st.plotly_chart(fig_cv, use_container_width=True)
+                    st.caption(f"Grey = raw model · Orange = bias-corrected · "
+                                f"Correction applied: {loocv['correction_offset']:+.1f} µg/m³")
+
+        # Per-station errors
+        if loocv.get("per_station"):
+            st.markdown("**Per-station bias:**")
+            ps_df = pd.DataFrame([
+                {"Location": k, "Bias (µg/m³)": v["bias"],
+                 "MAE": v["mae"], "N readings": v["n"]}
+                for k, v in loocv["per_station"].items()
+            ])
+            st.dataframe(ps_df, use_container_width=True)
+    else:
+        st.info("LOOCV requires ≥4 sensor readings. "
+                "Select a city with monitoring stations (Delhi, Mumbai, etc.) "
+                "and accumulate historical data.")
 
     st.markdown("---")
 
