@@ -45,7 +45,7 @@ def _tomtom_flow(lat, lon):
     try:
         url = (f"https://api.tomtom.com/traffic/services/4/flowSegmentData/"
                f"relative0/14/json?point={lat},{lon}&key={TOMTOM_KEY}")
-        r = requests.get(url, timeout=6).json()
+        r = requests.get(url, timeout=3).json()
         if "flowSegmentData" in r:
             fsd = r["flowSegmentData"]
             cs, ff = fsd.get("currentSpeed", 50), fsd.get("freeFlowSpeed", 50)
@@ -95,12 +95,11 @@ def interpolate_aq_to_points(pts, grids, lats, lons):
     return pts
 
 # ── Fetch TomTom for sampled points ───────────────────
-def enrich_with_traffic(pts, max_pts=40, delay=0.05):
+def enrich_with_traffic(pts, max_pts=20, delay=0.02):
     """
     Fetch TomTom traffic for a subsample of grid points.
-    Propagate to neighbours by proximity.
+    Hard 3s timeout per call to keep total under 60s.
     """
-    # Sample evenly — every Nth point
     step = max(1, len(pts) // max_pts)
     sampled_idx = list(range(0, len(pts), step))[:max_pts]
 
